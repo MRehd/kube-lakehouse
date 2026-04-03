@@ -1,0 +1,6 @@
+encryptionsalt: v1:hT3kZjX2Qsw=:v1:uJaWt1TDc+ANhbjn:jX+/RbZH1wCbSF/S9WJzLssVaj4wDg==
+config:
+  k8lh:minio_node: docker-desktop
+  k8lh:minio_root_user: minioadmin
+  k8lh:minio_root_password:
+    secure: v1:H3WcQY5XW4wDSuvK:s1XTZ4m4s4N2wznZ/UGJmtu3F673LiJ4DBU=
