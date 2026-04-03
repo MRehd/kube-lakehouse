@@ -1,7 +1,7 @@
-# kube-lakehouse
+# k8lh
 
 # create env
-conda create --name kube-lakehouse python=3.13
+conda create --name k8lh python=3.13
 
 # install uv if needed
 pip install uv
@@ -49,22 +49,50 @@ C:\Windows\System32\drivers\etc\hosts
 # Pulumi commands from
 cd infra
 
+# Check backend
+pulumi whoami -v
+
+# For local dev
+pulumi login --local
+
+# For azure
+pulumi login azblob://pulumi-container
+
+# See your state
+pulumi stack export > state.json
+
 # Set secrets
+pulumi config set minio_root_user "minioadmin"
 pulumi config set --secret minio_root_password "minioadmin"
-pulumi config get minio_root_password
+
+pulumi config set postgres_admin_user "postgresql"
+pulumi config set --secret postgres_admin_password "postgresql"
+
+pulumi config set polaris_postgres_user "polaris"
+pulumi config set --secret polaris_postgres_password "polaris"
+
+pulumi config set airflow_postgres_user "airflow"
+pulumi config set --secret airflow_postgres_password "airflow"
+
+pulumi config get SECRET_NAME
 pulumi config --show-secrets
 
 # Preview
+pulumi stack init dev
 pulumi stack select dev
 pulumi preview
 or
 pulumi preview --stack dev
 
 # Deploy
+pulumi refresh
 pulumi up
 
 # Remove lock
 pulumi cancel
 
 # Delete
-pulumi destroy
+pulumi destroy --yes
+
+# Clear state
+pulumi stack rm dev --yes
