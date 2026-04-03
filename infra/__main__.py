@@ -15,10 +15,10 @@ env = pulumi.get_stack()
 # Load configuration from stack file
 config = pulumi.Config()
 
-minio_root_user = config.require_secret('minio_root_user')
+minio_root_user = config.require('minio_root_user')
 minio_root_password = config.require_secret('minio_root_password')
 
-postgres_admin_user = config.require_secret('postgres_admin_user')
+postgres_admin_user = config.require('postgres_admin_user')
 postgres_admin_password = config.require_secret('postgres_admin_password')
 
 node = config.get('node')
