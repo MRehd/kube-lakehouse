@@ -17,3 +17,18 @@ config:
   k8lh:minio_root_password:
     description: MinIO root password
     secret: true
+  k8lh:postgres_admin_user:
+    description: PostgreSQL admin username
+  k8lh:postgres_admin_password:
+    description: PostgreSQL admin password
+    secret: true
+  k8lh:airflow_postgres_user:
+    description: PostgreSQL Airflow username
+  k8lh:airflow_postgres_password:
+    description: PostgreSQL Airflow password
+    secret: true
+  k8lh:polaris_postgres_user:
+    description: PostgreSQL Polaris username
+  k8lh:polaris_postgres_password:
+    description: PostgreSQL Polaris password
+    secret: true

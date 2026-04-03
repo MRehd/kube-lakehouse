@@ -129,7 +129,7 @@ class Minio(pulumi.ComponentResource):
         args: MinioArgs = None,
         opts: pulumi.ResourceOptions = None,
     ):
-        super().__init__('kube-lakehouse:minio:Minio', name, {}, opts)
+        super().__init__('k8lh:minio:Minio', name, {}, opts)
 
         args = args or MinioArgs()
         self._args = args
@@ -174,7 +174,7 @@ class Minio(pulumi.ComponentResource):
             self.console_host = f'minio-console.{args.ingress_domain}'
 
             self.ingress = self._create_ingress(args)
-            
+
             self.api_url = pulumi.Output.from_input(f'http://{self.api_host}')
             self.console_url = pulumi.Output.from_input(f'http://{self.console_host}')
         else:

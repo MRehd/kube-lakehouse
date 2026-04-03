@@ -1,7 +1,16 @@
-encryptionsalt: v1:hT3kZjX2Qsw=:v1:uJaWt1TDc+ANhbjn:jX+/RbZH1wCbSF/S9WJzLssVaj4wDg==
+encryptionsalt: v1:Ppibo1CR7z0=:v1:QXsbyZcG9qaSCOdu:UgBtr/pCT1TrqsIHm0Uyi7Q0DDfkrA==
 config:
   k8lh:domain: k8lh.local
   k8lh:node: docker-desktop
   k8lh:minio_root_user: minioadmin
   k8lh:minio_root_password:
-    secure: v1:H3WcQY5XW4wDSuvK:s1XTZ4m4s4N2wznZ/UGJmtu3F673LiJ4DBU=
+    secure: v1:C+wxeLpAxpUiNQfe:P2xORwQSAcKaigjWQxkQA0tSaaCbquJqMeU=
+  k8lh:postgres_admin_user: postgresql
+  k8lh:postgres_admin_password:
+    secure: v1:Zzc/zjrbrVLf7wi1:0jlnmMFmy61SVPxRaQgQHIcPhrMk6u3txkU=
+  k8lh:polaris_postgres_user: polaris
+  k8lh:polaris_postgres_password:
+    secure: v1:roC96u6KCjUy5o2+:iJ8pUZz/kxjuP0dEdgRoD1K0kCRWqTM=
+  k8lh:airflow_postgres_user: airflow
+  k8lh:airflow_postgres_password:
+    secure: v1:nvPUHe2C2Qsepl00:Yunz4vQNEwk3r8uguF2+Jtbckgey9MU=

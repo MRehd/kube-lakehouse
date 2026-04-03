@@ -5,6 +5,8 @@ from pulumi_kubernetes.core.v1 import Namespace
 from pulumi_kubernetes.helm.v3 import Chart, ChartOpts, FetchOpts
 
 from minio import BucketArgs, Minio, MinioArgs
+from psql import DatabaseArgs, GrantArgs, Psql, PsqlArgs, UserArgs
+
 
 # Get project name from Pulumi.yaml
 project_name = pulumi.get_project()
@@ -12,8 +14,13 @@ env = pulumi.get_stack()
 
 # Load configuration from stack file
 config = pulumi.Config()
-minio_root_user = config.require('minio_root_user')
+
+minio_root_user = config.require_secret('minio_root_user')
 minio_root_password = config.require_secret('minio_root_password')
+
+postgres_admin_user = config.require_secret('postgres_admin_user')
+postgres_admin_password = config.require_secret('postgres_admin_password')
+
 node = config.get('node')
 domain = config.require('domain')
 
@@ -42,7 +49,7 @@ ingress_nginx = Chart(
     ),
 )
 
-# Node selector for MinIO pod scheduling
+# Node selector
 node_selector = {'kubernetes.io/hostname': node}
 
 # Deploy MinIO for object storage
@@ -65,6 +72,70 @@ minio.create_buckets('lakehouse-buckets', [
     BucketArgs(name='silver', versioning=True),
     BucketArgs(name='gold', versioning=True),
 ])
+
+# Create Psql instance for metadata management
+psql_name = f'psql-{project_name}-{env}'
+psql = Psql(
+  psql_name, 
+  PsqlArgs(
+    namespace=ns_name,
+    release_name=psql_name,
+    node_selector=node_selector,
+    username=postgres_admin_user,
+    password=postgres_admin_password
+
+  )
+)
+
+# Create metadata database and users
+airflow_db = 'airflow'
+polaris_db = 'polaris'
+
+# Usernames are not secrets - only passwords are
+airflow_user = config.require('airflow_postgres_user')
+polaris_user = config.require('polaris_postgres_user')
+
+db_specs = [
+    {
+        'db': DatabaseArgs(name=airflow_db, owner=airflow_user),
+        'users': [
+            UserArgs(
+                name=airflow_user, 
+                password=config.require_secret('airflow_postgres_password'), 
+                login=True, 
+                superuser=False,
+            )
+        ]
+    },
+    {
+        'db': DatabaseArgs(name=polaris_db, owner=polaris_user),
+        'users': [
+            UserArgs(
+                name=polaris_user, 
+                password=config.require_secret('polaris_postgres_password'), 
+                login=True, 
+                superuser=False,
+            )
+        ]
+    }
+]
+
+db = {}
+for spec in db_specs:
+    db_name = spec['db'].name
+    user_list = []
+    for user in spec['users']:
+        user_list.append(
+            psql.create_users(
+                f'psqluser-{db_name}-{user.name}', 
+                user
+            )
+        )
+    db[db_name] = {
+        'users': user_list,
+        'instance': psql.create_databases(f'psqldb-{db_name}', spec['db'])
+    }
+
 
 pulumi.export('minio_endpoint', minio.endpoint)
 pulumi.export('minio_console', minio.console_endpoint)
