@@ -96,17 +96,11 @@ class PsqlArgs:
     architecture: str = 'standalone'
     '''Deployment architecture: 'standalone' or 'replication'.'''
 
-    postgres_password: Optional[str] = None
-    '''Password for the postgres superuser. If not provided, a random one is generated.'''
+    postgres_password: pulumi.Input[str] = None
+    '''Password for the postgres superuser. Accepts Output[str] from config.require_secret().'''
 
     database: str = 'postgres'
     '''Default database to create.'''
-
-    username: Optional[str] = None
-    '''Additional non-admin username to create.'''
-
-    password: Optional[str] = None
-    '''Password for the additional user.'''
 
     persistence_enabled: bool = True
     '''Enable persistent storage for PostgreSQL data.'''
@@ -114,8 +108,8 @@ class PsqlArgs:
     persistence_size: str = '10Gi'
     '''Size of the persistent volume for PostgreSQL data.'''
 
-    storage_class: Optional[str] = None
-    '''Kubernetes storage class to use for persistence.'''
+    storage_class: str = 'hostpath'
+    '''Kubernetes storage class to use for persistence (default: hostpath for Docker Desktop).'''
 
     service_type: str = 'ClusterIP'
     '''Kubernetes service type: ClusterIP, NodePort, or LoadBalancer.'''
@@ -184,6 +178,10 @@ class Psql(pulumi.ComponentResource):
         # Build Helm values from args
         values = self._build_values(args)
 
+        # DEBUG: Print values to see what's being passed
+        import json
+        pulumi.log.info(f"PostgreSQL Helm values: {json.dumps(values, indent=2, default=str)}")
+
         # Deploy PostgreSQL using Bitnami Helm chart
         self.chart = Chart(
             f'{name}-chart',
@@ -222,6 +220,11 @@ class Psql(pulumi.ComponentResource):
             'connection_string': self.connection_string,
         })
 
+    @staticmethod
+    def _resolve_output_from_input(output: pulumi.Input[str]) -> pulumi.Output[str]:
+        '''Resolve a Pulumi Output from an Input.'''
+        return pulumi.Output.from_input(output)
+
     def _build_values(self, args: PsqlArgs) -> dict:
         '''Build Helm chart values from PsqlArgs.'''
         values = {
@@ -250,22 +253,13 @@ shared_buffers = {args.shared_buffers}
         }
 
         # Add postgres password if provided
-        if args.postgres_password:
-            values['auth']['postgresPassword'] = args.postgres_password
-
-        # Add additional user if specified
-        if args.username:
-            values['auth']['username'] = args.username
-            if args.password:
-                values['auth']['password'] = args.password
+        values['auth']['postgresPassword'] = args.postgres_password
 
         # Add storage class if specified
-        if args.storage_class:
-            values['primary']['persistence']['storageClass'] = args.storage_class
+        values['primary']['persistence']['storageClass'] = args.storage_class
 
         # Node selector for pod scheduling
-        if args.node_selector:
-            values['primary']['nodeSelector'] = args.node_selector
+        values['primary']['nodeSelector'] = args.node_selector
 
         # Merge extra values (allowing overrides)
         values = self._deep_merge(values, args.extra_values)

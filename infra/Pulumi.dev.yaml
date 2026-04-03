@@ -5,7 +5,7 @@ config:
   k8lh:minio_root_user: minioadmin
   k8lh:minio_root_password:
     secure: v1:C+wxeLpAxpUiNQfe:P2xORwQSAcKaigjWQxkQA0tSaaCbquJqMeU=
-  k8lh:postgres_admin_user: postgresql
+  k8lh:postgres_admin_user: postgres
   k8lh:postgres_admin_password:
     secure: v1:Zzc/zjrbrVLf7wi1:0jlnmMFmy61SVPxRaQgQHIcPhrMk6u3txkU=
   k8lh:polaris_postgres_user: polaris

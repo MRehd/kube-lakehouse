@@ -21,6 +21,12 @@ minio_root_password = config.require_secret('minio_root_password')
 postgres_admin_user = config.require('postgres_admin_user')
 postgres_admin_password = config.require_secret('postgres_admin_password')
 
+airflow_postgres_user = config.require('airflow_postgres_user')
+airflow_postgres_password = config.require_secret('airflow_postgres_password')
+
+polaris_postgres_user = config.require('polaris_postgres_user')
+polaris_postgres_password = config.require_secret('polaris_postgres_password')
+
 node = config.get('node')
 domain = config.require('domain')
 
@@ -81,9 +87,7 @@ psql = Psql(
     namespace=ns_name,
     release_name=psql_name,
     node_selector=node_selector,
-    username=postgres_admin_user,
-    password=postgres_admin_password
-
+    postgres_password=postgres_admin_password,
   )
 )
 
@@ -91,28 +95,24 @@ psql = Psql(
 airflow_db = 'airflow'
 polaris_db = 'polaris'
 
-# Usernames are not secrets - only passwords are
-airflow_user = config.require('airflow_postgres_user')
-polaris_user = config.require('polaris_postgres_user')
-
 db_specs = [
     {
-        'db': DatabaseArgs(name=airflow_db, owner=airflow_user),
+        'db': DatabaseArgs(name=airflow_db, owner=airflow_postgres_user),
         'users': [
             UserArgs(
-                name=airflow_user, 
-                password=config.require_secret('airflow_postgres_password'), 
+                name=airflow_postgres_user, 
+                password=airflow_postgres_password, 
                 login=True, 
                 superuser=False,
             )
         ]
     },
     {
-        'db': DatabaseArgs(name=polaris_db, owner=polaris_user),
+        'db': DatabaseArgs(name=polaris_db, owner=polaris_postgres_user),
         'users': [
             UserArgs(
-                name=polaris_user, 
-                password=config.require_secret('polaris_postgres_password'), 
+                name=polaris_postgres_user, 
+                password=polaris_postgres_password, 
                 login=True, 
                 superuser=False,
             )
