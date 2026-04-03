@@ -8,3 +8,12 @@ config:
   pulumi:tags:
     value:
       pulumi:template: kubernetes-python
+  k8lh:domain:
+    description: Domain for ingress hosts (e.g., k8lh.local)
+  k8lh:node:
+    description: Kubernetes node hostname for pod scheduling
+  k8lh:minio_root_user:
+    description: MinIO root username
+  k8lh:minio_root_password:
+    description: MinIO root password
+    secret: true

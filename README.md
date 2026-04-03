@@ -40,6 +40,15 @@ kubectl describe pod minio-k8lh-dev-0 -n k8lh
 # Delete pod (controller recreates it)
 kubectl delete pod minio-k8lh-dev-0 -n k8lh
 
+# Hosts
+C:\Windows\System32\drivers\etc\hosts
+
+127.0.0.1 minio.k8lh.local
+127.0.0.1 minio-console.k8lh.local
+
+# Pulumi commands from
+cd infra
+
 # Set secrets
 pulumi config set --secret minio_root_password "minioadmin"
 pulumi config get minio_root_password
@@ -53,3 +62,9 @@ pulumi preview --stack dev
 
 # Deploy
 pulumi up
+
+# Remove lock
+pulumi cancel
+
+# Delete
+pulumi destroy

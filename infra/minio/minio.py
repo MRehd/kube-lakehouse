@@ -6,6 +6,7 @@ from typing import List, Optional
 import pulumi
 from pulumi_kubernetes.batch.v1 import Job
 from pulumi_kubernetes.helm.v3 import Chart, ChartOpts, FetchOpts
+from pulumi_kubernetes.networking.v1 import Ingress
 
 
 @dataclass
@@ -92,6 +93,18 @@ class MinioArgs:
     node_selector: Optional[dict] = None
     '''Node selector for pod scheduling (e.g., {'kubernetes.io/hostname': 'node-1'}).'''
 
+    ingress_enabled: bool = False
+    '''Enable Ingress for external access.'''
+
+    ingress_domain: Optional[str] = None
+    '''Domain for Ingress (e.g., 'k8lh.local'). Creates minio.<domain> and minio-console.<domain>.'''
+
+    ingress_class_name: str = 'nginx'
+    '''Ingress class name (e.g., 'nginx', 'traefik').'''
+
+    ingress_annotations: Optional[dict] = None
+    '''Additional annotations for the Ingress resource.'''
+
 
 class Minio(pulumi.ComponentResource):
     '''
@@ -153,11 +166,82 @@ class Minio(pulumi.ComponentResource):
             '.svc.', args.cluster_domain, ':', str(args.console_port)
         )
 
+        # Create Ingress if enabled
+        self.ingress = None
+        if args.ingress_enabled and args.ingress_domain:
+
+            self.api_host = f'minio.{args.ingress_domain}'
+            self.console_host = f'minio-console.{args.ingress_domain}'
+
+            self.ingress = self._create_ingress(args)
+            
+            self.api_url = pulumi.Output.from_input(f'http://{self.api_host}')
+            self.console_url = pulumi.Output.from_input(f'http://{self.console_host}')
+        else:
+            self.api_url = self.endpoint
+            self.console_url = self.console_endpoint
+
         self.register_outputs({
             'namespace': self.namespace,
             'endpoint': self.endpoint,
             'console_endpoint': self.console_endpoint,
+            'api_url': self.api_url,
+            'console_url': self.console_url,
         })
+
+    def _create_ingress(self, args: MinioArgs) -> Ingress:
+        '''Create Ingress for MinIO API and Console.'''
+        annotations = {
+            'nginx.ingress.kubernetes.io/proxy-body-size': '0',  # Unlimited upload size
+            'nginx.ingress.kubernetes.io/proxy-read-timeout': '600',
+            'nginx.ingress.kubernetes.io/proxy-send-timeout': '600',
+        }
+        if args.ingress_annotations:
+            annotations.update(args.ingress_annotations)
+
+        return Ingress(
+            f'{self._release_name}-ingress',
+            metadata={
+                'namespace': args.namespace,
+                'annotations': annotations,
+            },
+            spec={
+                'ingressClassName': args.ingress_class_name,
+                'rules': [
+                    {
+                        'host': self.api_host,
+                        'http': {
+                            'paths': [{
+                                'path': '/',
+                                'pathType': 'Prefix',
+                                'backend': {
+                                    'service': {
+                                        'name': self._release_name,
+                                        'port': {'number': args.api_port},
+                                    },
+                                },
+                            }],
+                        },
+                    },
+                    {
+                        'host': self.console_host,
+                        'http': {
+                            'paths': [{
+                                'path': '/',
+                                'pathType': 'Prefix',
+                                'backend': {
+                                    'service': {
+                                        'name': f'{self._release_name}-console',
+                                        'port': {'number': args.console_port},
+                                    },
+                                },
+                            }],
+                        },
+                    },
+                ],
+            },
+            opts=pulumi.ResourceOptions(parent=self, depends_on=[self.chart]),
+        )
 
     def _build_values(self, args: MinioArgs) -> dict:
         '''Build Helm chart values from MinioArgs.'''
