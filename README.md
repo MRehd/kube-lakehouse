@@ -65,7 +65,7 @@ pulumi stack export > state.json
 pulumi config set minio_root_user "minioadmin"
 pulumi config set --secret minio_root_password "minioadmin"
 
-pulumi config set postgres_admin_user "postgresql"
+pulumi config set postgres_admin_user "postgres"
 pulumi config set --secret postgres_admin_password "postgresql"
 
 pulumi config set polaris_postgres_user "polaris"
