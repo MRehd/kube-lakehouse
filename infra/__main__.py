@@ -15,19 +15,6 @@ env = pulumi.get_stack()
 
 # Load configuration from stack file
 config = pulumi.Config()
-
-minio_root_user = config.require('minio_root_user')
-minio_root_password = config.require_secret('minio_root_password')
-
-postgres_admin_user = config.require('postgres_admin_user')
-postgres_admin_password = config.require_secret('postgres_admin_password')
-
-airflow_postgres_user = config.require('airflow_postgres_user')
-airflow_postgres_password = config.require_secret('airflow_postgres_password')
-
-polaris_postgres_user = config.require('polaris_postgres_user')
-polaris_postgres_password = config.require_secret('polaris_postgres_password')
-
 domain = config.require('domain')
 
 # Create namespace for the lakehouse
@@ -97,8 +84,8 @@ minio = Minio(minio_name, MinioArgs(
     mode='standalone',
     replicas=1,
     persistence_size='10Gi',
-    root_user=minio_root_user,
-    root_password=minio_root_password,
+    root_user=credentials['minio']['user'],
+    root_password=credentials['minio']['password'],
     ingress_enabled=True,
     ingress_domain=domain,
     ingress_class_name='nginx',
@@ -122,6 +109,7 @@ psql = Psql(
     namespace=ns.metadata.name,
     release_name=psql_name,
     existing_secret='postgres',
+    service_type='LoadBalancer',
   ),
   opts=pulumi.ResourceOptions(depends_on=[lakehouse_secrets]),
 )
@@ -132,22 +120,22 @@ polaris_db = 'polaris'
 
 db_specs = [
     {
-        'db': DatabaseArgs(name=airflow_db, owner=airflow_postgres_user),
+        'db': DatabaseArgs(name=airflow_db, owner=credentials['airflow']['user']),
         'users': [
             UserArgs(
-                name=airflow_postgres_user, 
-                password=airflow_postgres_password, 
+                name=credentials['airflow']['user'], 
+                password=credentials['airflow']['password'], 
                 login=True, 
                 superuser=False,
             )
         ]
     },
     {
-        'db': DatabaseArgs(name=polaris_db, owner=polaris_postgres_user),
+        'db': DatabaseArgs(name=polaris_db, owner=credentials['polaris']['user']),
         'users': [
             UserArgs(
-                name=polaris_postgres_user, 
-                password=polaris_postgres_password, 
+                name=credentials['polaris']['user'], 
+                password=credentials['polaris']['password'], 
                 login=True, 
                 superuser=False,
             )

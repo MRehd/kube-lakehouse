@@ -175,10 +175,6 @@ class Psql(pulumi.ComponentResource):
         # Build Helm values from args
         values = self._build_values(args)
 
-         # DEBUG: Print values to see what's being passed
-        import json
-        pulumi.log.info(f"PostgreSQL Helm values: {json.dumps(values, indent=2, default=str)}")
-
         # Deploy PostgreSQL using Bitnami Helm chart
         self.chart = Chart(
             f'{name}-chart',
@@ -231,11 +227,11 @@ class Psql(pulumi.ComponentResource):
 max_connections = {args.max_connections}
 shared_buffers = {args.shared_buffers}
 ''',
-            },
-            'service': {
-                'type': args.service_type,
-                'ports': {
-                    'postgresql': args.port,
+                'service': {
+                    'type': args.service_type,
+                    'ports': {
+                        'postgresql': args.port,
+                    },
                 },
             },
             'auth': {
