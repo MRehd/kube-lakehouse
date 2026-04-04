@@ -90,9 +90,6 @@ class MinioArgs:
     release_name: Optional[str] = None
     '''Helm release name (controls K8s resource names). If not set, uses the Pulumi resource name.'''
 
-    node_selector: Optional[dict] = None
-    '''Node selector for pod scheduling (e.g., {'kubernetes.io/hostname': 'node-1'}).'''
-
     ingress_enabled: bool = False
     '''Enable Ingress for external access.'''
 
@@ -270,10 +267,6 @@ class Minio(pulumi.ComponentResource):
         # Add storage class if specified
         if args.storage_class:
             values['persistence']['storageClass'] = args.storage_class
-
-        # Node selector for pod scheduling
-        if args.node_selector:
-            values['nodeSelector'] = args.node_selector
 
         # Merge extra values (allowing overrides)
         values = self._deep_merge(values, args.extra_values)

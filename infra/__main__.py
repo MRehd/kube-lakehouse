@@ -6,6 +6,7 @@ from pulumi_kubernetes.helm.v3 import Chart, ChartOpts, FetchOpts
 
 from minio import BucketArgs, Minio, MinioArgs
 from psql import DatabaseArgs, GrantArgs, Psql, PsqlArgs, UserArgs
+from secrets import LakehouseSecrets, SecretArgs
 
 
 # Get project name from Pulumi.yaml
@@ -27,46 +28,45 @@ airflow_postgres_password = config.require_secret('airflow_postgres_password')
 polaris_postgres_user = config.require('polaris_postgres_user')
 polaris_postgres_password = config.require_secret('polaris_postgres_password')
 
-node = config.get('node')
 domain = config.require('domain')
 
 # Create namespace for the lakehouse
 ns_name = f'ns-{project_name}-{env}'
 ns = Namespace(ns_name, metadata={'name': ns_name})
 
-# # Credentials dictionary for all services
-# credentials = {
-#     'minio': {
-#         'user': config.require('minio_root_user'),
-#         'password': config.require_secret('minio_root_password'),
-#     },
-#     'postgres': {
-#         'user': config.require('postgres_admin_user'),
-#         'password': config.require_secret('postgres_admin_password'),
-#     },
-#     'airflow': {
-#         'user': config.require('airflow_postgres_user'),
-#         'password': config.require_secret('airflow_postgres_password'),
-#     },
-#     'polaris': {
-#         'user': config.require('polaris_postgres_user'),
-#         'password': config.require_secret('polaris_postgres_password'),
-#     },
-# }
+# Credentials dictionary for all services
+credentials = {
+    'minio': {
+        'user': config.require('minio_root_user'),
+        'password': config.require_secret('minio_root_password'),
+    },
+    'postgres': {
+        'user': config.require('postgres_admin_user'),
+        'password': config.require_secret('postgres_admin_password'),
+    },
+    'airflow': {
+        'user': config.require('airflow_postgres_user'),
+        'password': config.require_secret('airflow_postgres_password'),
+    },
+    'polaris': {
+        'user': config.require('polaris_postgres_user'),
+        'password': config.require_secret('polaris_postgres_password'),
+    },
+}
 
-# # Create Kubernetes secrets from credentials dictionary
-# lakehouse_secrets = LakehouseSecrets(
-#     f'secrets-{project_name}-{env}',
-#     ns.metadata.name,
-#     [
-#         SecretArgs(
-#             name=service_name,
-#             data={'user': creds['user'], 'password': creds['password']},
-#         )
-#         for service_name, creds in credentials.items()
-#     ],
-#     opts=pulumi.ResourceOptions(depends_on=[ns]),
-# )
+# Create Kubernetes secrets from credentials dictionary
+lakehouse_secrets = LakehouseSecrets(
+    f'secrets-{project_name}-{env}',
+    ns.metadata.name,
+    [
+        SecretArgs(
+            name=service_name,
+            data={'user': creds['user'], 'password': creds['password']},
+        )
+        for service_name, creds in credentials.items()
+    ],
+    opts=pulumi.ResourceOptions(depends_on=[ns]),
+)
 
 # Deploy NGINX Ingress Controller
 ingress_name = f'inginx-{project_name}-{env}'
@@ -89,29 +89,30 @@ ingress_nginx = Chart(
     ),
 )
 
-# Node selector
-node_selector = {'kubernetes.io/hostname': node}
-
 # Deploy MinIO for object storage
 minio_name = f'minio-{project_name}-{env}'
 minio = Minio(minio_name, MinioArgs(
     namespace=ns.metadata.name,
     release_name=minio_name,
+    mode='standalone',
+    replicas=1,
     persistence_size='10Gi',
     root_user=minio_root_user,
     root_password=minio_root_password,
-    node_selector=node_selector,
     ingress_enabled=True,
     ingress_domain=domain,
     ingress_class_name='nginx',
 ), opts=pulumi.ResourceOptions(depends_on=[ns, ingress_nginx]))
 
 # Create lakehouse buckets (medallion architecture)
-minio.create_buckets('lakehouse-buckets', [
-    BucketArgs(name='bronze', versioning=True),
-    BucketArgs(name='silver', versioning=True),
-    BucketArgs(name='gold', versioning=True),
-])
+minio.create_buckets(
+    f'bucket-{project_name}-{env}-', 
+    [
+        BucketArgs(name='bronze', versioning=True),
+        BucketArgs(name='silver', versioning=True),
+        BucketArgs(name='gold', versioning=True),
+    ]
+)
 
 # Create Psql instance for metadata management
 psql_name = f'psql-{project_name}-{env}'
@@ -120,9 +121,9 @@ psql = Psql(
   PsqlArgs(
     namespace=ns.metadata.name,
     release_name=psql_name,
-    node_selector=node_selector,
-    postgres_password=postgres_admin_password
-  )
+    existing_secret='postgres',
+  ),
+  opts=pulumi.ResourceOptions(depends_on=[lakehouse_secrets]),
 )
 
 # Create metadata database and users
@@ -167,7 +168,11 @@ for spec in db_specs:
         )
     db[db_name] = {
         'users': user_list,
-        'instance': psql.create_databases(f'psqldb-{db_name}', spec['db'])
+        'instance': psql.create_databases(
+            f'psqldb-{db_name}', 
+            spec['db'],
+            opts=pulumi.ResourceOptions(depends_on=user_list),
+        )
     }
 
 

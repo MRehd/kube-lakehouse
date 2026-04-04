@@ -96,8 +96,8 @@ class PsqlArgs:
     architecture: str = 'standalone'
     '''Deployment architecture: 'standalone' or 'replication'.'''
 
-    postgres_password: str = None
-    '''Password for the postgres superuser.'''
+    existing_secret: str = None
+    '''Name of existing Kubernetes secret containing postgres-password key.'''
 
     database: str = 'postgres'
     '''Default database to create.'''
@@ -120,7 +120,7 @@ class PsqlArgs:
     })
     '''Resource requests and limits for PostgreSQL pods.'''
 
-    chart_version: str = '16.0.0'
+    chart_version: str = '15.5.38'
     '''Version of the Bitnami PostgreSQL Helm chart to deploy.'''
 
     extra_values: dict = field(default_factory=dict)
@@ -134,9 +134,6 @@ class PsqlArgs:
 
     release_name: Optional[str] = None
     '''Helm release name (controls K8s resource names). If not set, uses the Pulumi resource name.'''
-
-    node_selector: Optional[dict] = None
-    '''Node selector for pod scheduling (e.g., {'kubernetes.io/hostname': 'node-1'}).'''
 
     max_connections: int = 100
     '''Maximum number of concurrent connections.'''
@@ -156,7 +153,7 @@ class Psql(pulumi.ComponentResource):
         psql = Psql('my-postgres', PsqlArgs(
             namespace='data',
             persistence_size='50Gi',
-            postgres_password='secretpassword',
+            existing_secret='postgres-secret',
         ))
         ```
     '''
@@ -206,18 +203,13 @@ class Psql(pulumi.ComponentResource):
         self.endpoint = pulumi.Output.concat(
             self.host, ':', str(args.port)
         )
-        self.connection_string = pulumi.Output.concat(
-            'postgresql://postgres:',
-            args.postgres_password or 'postgres',
-            '@', self.host, ':', str(args.port),
-            '/', args.database
-        )
+        self.secret_name = pulumi.Output.from_input(args.existing_secret)
 
         self.register_outputs({
             'namespace': self.namespace,
             'host': self.host,
             'endpoint': self.endpoint,
-            'connection_string': self.connection_string,
+            'secret_name': self.secret_name,
         })
 
     def _build_values(self, args: PsqlArgs) -> dict:
@@ -225,12 +217,14 @@ class Psql(pulumi.ComponentResource):
         values = {
             'fullnameOverride': self._release_name,
             'architecture': args.architecture,
+            'image': {
+                'tag': 'latest',
+            },
             'primary': {
                 'persistence': {
                     'enabled': args.persistence_enabled,
                     'size': args.persistence_size,
                     'storageClass': args.storage_class,
-                    'nodeSelector': args.node_selector,
                 },
                 'resources': args.resources,
                 'extendedConfiguration': f'''
@@ -246,7 +240,10 @@ shared_buffers = {args.shared_buffers}
             },
             'auth': {
                 'database': args.database,
-                'postgresPassword': args.postgres_password
+                'existingSecret': args.existing_secret,
+                'secretKeys': {
+                    'adminPasswordKey': 'password',
+                },
             },
         }
 
@@ -356,9 +353,14 @@ shared_buffers = {args.shared_buffers}
                                         'value': 'postgres',
                                     },
                                     {
-                                        # PGPASSWORD for authentication
+                                        # PGPASSWORD from existing secret
                                         'name': 'PGPASSWORD',
-                                        'value': self._args.postgres_password or 'postgres',
+                                        'valueFrom': {
+                                            'secretKeyRef': {
+                                                'name': self._args.existing_secret,
+                                                'key': 'password',
+                                            },
+                                        },
                                     },
                                 ],
                             },
@@ -499,9 +501,14 @@ shared_buffers = {args.shared_buffers}
                                         'value': 'postgres',
                                     },
                                     {
-                                        # PGPASSWORD for authentication
+                                        # PGPASSWORD from existing secret
                                         'name': 'PGPASSWORD',
-                                        'value': self._args.postgres_password or 'postgres',
+                                        'valueFrom': {
+                                            'secretKeyRef': {
+                                                'name': self._args.existing_secret,
+                                                'key': 'password',
+                                            },
+                                        },
                                     },
                                 ],
                             },
