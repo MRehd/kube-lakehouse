@@ -41,7 +41,7 @@ ingress_nginx = Chart(
     ChartOpts(
         chart='ingress-nginx',
         version='4.10.0',
-        namespace=ns_name,
+        namespace=ns.metadata.name,
         fetch_opts=FetchOpts(
             repo='https://kubernetes.github.io/ingress-nginx',
         ),
@@ -61,7 +61,7 @@ node_selector = {'kubernetes.io/hostname': node}
 # Deploy MinIO for object storage
 minio_name = f'minio-{project_name}-{env}'
 minio = Minio(minio_name, MinioArgs(
-    namespace=ns_name,
+    namespace=ns.metadata.name,
     release_name=minio_name,
     persistence_size='10Gi',
     root_user=minio_root_user,
@@ -84,10 +84,10 @@ psql_name = f'psql-{project_name}-{env}'
 psql = Psql(
   psql_name, 
   PsqlArgs(
-    namespace=ns_name,
+    namespace=ns.metadata.name,
     release_name=psql_name,
     node_selector=node_selector,
-    postgres_password=postgres_admin_password,
+    postgres_password=postgres_admin_password
   )
 )
 

@@ -96,8 +96,8 @@ class PsqlArgs:
     architecture: str = 'standalone'
     '''Deployment architecture: 'standalone' or 'replication'.'''
 
-    postgres_password: pulumi.Input[str] = None
-    '''Password for the postgres superuser. Accepts Output[str] from config.require_secret().'''
+    postgres_password: str = None
+    '''Password for the postgres superuser.'''
 
     database: str = 'postgres'
     '''Default database to create.'''
@@ -178,7 +178,7 @@ class Psql(pulumi.ComponentResource):
         # Build Helm values from args
         values = self._build_values(args)
 
-        # DEBUG: Print values to see what's being passed
+         # DEBUG: Print values to see what's being passed
         import json
         pulumi.log.info(f"PostgreSQL Helm values: {json.dumps(values, indent=2, default=str)}")
 
@@ -220,11 +220,6 @@ class Psql(pulumi.ComponentResource):
             'connection_string': self.connection_string,
         })
 
-    @staticmethod
-    def _resolve_output_from_input(output: pulumi.Input[str]) -> pulumi.Output[str]:
-        '''Resolve a Pulumi Output from an Input.'''
-        return pulumi.Output.from_input(output)
-
     def _build_values(self, args: PsqlArgs) -> dict:
         '''Build Helm chart values from PsqlArgs.'''
         values = {
@@ -234,6 +229,8 @@ class Psql(pulumi.ComponentResource):
                 'persistence': {
                     'enabled': args.persistence_enabled,
                     'size': args.persistence_size,
+                    'storageClass': args.storage_class,
+                    'nodeSelector': args.node_selector,
                 },
                 'resources': args.resources,
                 'extendedConfiguration': f'''
@@ -249,17 +246,9 @@ shared_buffers = {args.shared_buffers}
             },
             'auth': {
                 'database': args.database,
+                'postgresPassword': args.postgres_password
             },
         }
-
-        # Add postgres password if provided
-        values['auth']['postgresPassword'] = args.postgres_password
-
-        # Add storage class if specified
-        values['primary']['persistence']['storageClass'] = args.storage_class
-
-        # Node selector for pod scheduling
-        values['primary']['nodeSelector'] = args.node_selector
 
         # Merge extra values (allowing overrides)
         values = self._deep_merge(values, args.extra_values)
