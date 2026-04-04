@@ -34,6 +34,40 @@ domain = config.require('domain')
 ns_name = f'ns-{project_name}-{env}'
 ns = Namespace(ns_name, metadata={'name': ns_name})
 
+# # Credentials dictionary for all services
+# credentials = {
+#     'minio': {
+#         'user': config.require('minio_root_user'),
+#         'password': config.require_secret('minio_root_password'),
+#     },
+#     'postgres': {
+#         'user': config.require('postgres_admin_user'),
+#         'password': config.require_secret('postgres_admin_password'),
+#     },
+#     'airflow': {
+#         'user': config.require('airflow_postgres_user'),
+#         'password': config.require_secret('airflow_postgres_password'),
+#     },
+#     'polaris': {
+#         'user': config.require('polaris_postgres_user'),
+#         'password': config.require_secret('polaris_postgres_password'),
+#     },
+# }
+
+# # Create Kubernetes secrets from credentials dictionary
+# lakehouse_secrets = LakehouseSecrets(
+#     f'secrets-{project_name}-{env}',
+#     ns.metadata.name,
+#     [
+#         SecretArgs(
+#             name=service_name,
+#             data={'user': creds['user'], 'password': creds['password']},
+#         )
+#         for service_name, creds in credentials.items()
+#     ],
+#     opts=pulumi.ResourceOptions(depends_on=[ns]),
+# )
+
 # Deploy NGINX Ingress Controller
 ingress_name = f'inginx-{project_name}-{env}'
 ingress_nginx = Chart(

@@ -120,7 +120,7 @@ class PsqlArgs:
     })
     '''Resource requests and limits for PostgreSQL pods.'''
 
-    chart_version: str = '16.4.3'
+    chart_version: str = '16.0.0'
     '''Version of the Bitnami PostgreSQL Helm chart to deploy.'''
 
     extra_values: dict = field(default_factory=dict)
