@@ -1,9 +1,14 @@
 '''Reusable MinIO component for Kubernetes using Helm charts.'''
 
+import json
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import List, Optional
 
 import pulumi
+
+# Config directory for templates
+CONFIG_DIR = Path(__file__).parent.parent / 'config'
 from pulumi_kubernetes.batch.v1 import Job
 from pulumi_kubernetes.helm.v3 import Chart, ChartOpts, FetchOpts
 from pulumi_kubernetes.networking.v1 import Ingress
@@ -242,23 +247,18 @@ class Minio(pulumi.ComponentResource):
 
     def _build_values(self, args: MinioArgs) -> dict:
         '''Build Helm chart values from MinioArgs.'''
-        values = {
-            'fullnameOverride': self._release_name,
-            'mode': args.mode,
-            'rootUser': args.root_user,
-            'replicas': args.replicas if args.mode == 'distributed' else 1,
-            'persistence': {
-                'enabled': args.persistence_enabled,
-                'size': args.persistence_size,
-            },
-            'service': {
-                'type': args.service_type,
-            },
-            'consoleService': {
-                'type': args.console_service_type,
-            },
-            'resources': args.resources,
-        }
+        values = json.loads((CONFIG_DIR / 'helm/helm_values_minio.json').read_text())
+
+        # Override with args
+        values['fullnameOverride'] = self._release_name
+        values['mode'] = args.mode
+        values['rootUser'] = args.root_user
+        values['replicas'] = args.replicas if args.mode == 'distributed' else 1
+        values['persistence']['enabled'] = args.persistence_enabled
+        values['persistence']['size'] = args.persistence_size
+        values['service']['type'] = args.service_type
+        values['consoleService']['type'] = args.console_service_type
+        values['resources'] = args.resources
 
         # Add root password if provided
         if args.root_password:
@@ -322,6 +322,25 @@ class Minio(pulumi.ComponentResource):
         # Build the mc commands for each bucket
         commands = self._build_mc_commands(buckets)
 
+        # Load job spec and configure
+        spec = json.loads((CONFIG_DIR / 'jobs/mc_job_spec.json').read_text())
+        container = spec['template']['spec']['containers'][0]
+        container['args'] = [commands]
+        container['env'][0]['value'] = pulumi.Output.concat(
+            'http://',
+            self._args.root_user,
+            ':',
+            self._args.root_password or 'minioadmin',
+            '@',
+            self._release_name,
+            '.',
+            self._args.namespace,
+            '.svc.',
+            self._args.cluster_domain,
+            ':',
+            str(self._args.api_port),
+        )
+
         job_opts = pulumi.ResourceOptions(
             parent=self,
             depends_on=[self.chart],
@@ -335,79 +354,43 @@ class Minio(pulumi.ComponentResource):
                 'namespace': self._args.namespace,
                 'labels': {'app': 'minio-bucket-provisioner'},
             },
-            spec={
-                # Auto-delete the Job 5 minutes after it completes (cleanup)
-                'ttlSecondsAfterFinished': 300,
-                # Retry up to 3 times if the Job fails
-                'backoffLimit': 3,
-                'template': {
-                    'spec': {
-                        # Only restart the pod on failure, not on success
-                        'restartPolicy': 'OnFailure',
-                        'containers': [
-                            {
-                                'name': 'mc',
-                                # Official MinIO Client image for bucket operations
-                                'image': 'minio/mc:latest',
-                                # Run commands via shell to support chaining with &&
-                                'command': ['/bin/sh', '-c'],
-                                # The actual mc commands to create/configure buckets
-                                'args': [commands],
-                                'env': [
-                                    {
-                                        # MC_HOST_<alias> sets connection info for the mc CLI
-                                        # Format: http://user:password@host:port
-                                        'name': 'MC_HOST_minio',
-                                        'value': pulumi.Output.concat(
-                                            'http://',
-                                            self._args.root_user,
-                                            ':',
-                                            self._args.root_password or 'minioadmin',
-                                            '@',
-                                            self._release_name,
-                                            '.',
-                                            self._args.namespace,
-                                            '.svc.',
-                                            self._args.cluster_domain,
-                                            ':',
-                                            str(self._args.api_port),
-                                        ),
-                                    },
-                                ],
-                            },
-                        ],
-                    },
-                },
-            },
+            spec=spec,
             opts=job_opts,
         )
 
     def _build_mc_commands(self, buckets: List[BucketArgs]) -> str:
         '''Build the shell commands to create and configure buckets.'''
-        commands = [
-            'sleep 5',  # Wait for MinIO to be ready
-        ]
+        scripts_dir = CONFIG_DIR / 'scripts'
+        create_tpl = (scripts_dir / 'create_bucket.sh').read_text().strip()
+        version_tpl = (scripts_dir / 'bucket_versioning.sh').read_text().strip()
+        retention_tpl = (scripts_dir / 'bucket_retention.sh').read_text().strip()
+        quota_tpl = (scripts_dir / 'bucket_quota.sh').read_text().strip()
+        policy_tpl = (scripts_dir / 'bucket_policy.sh').read_text().strip()
+
+        commands = ['sleep 5']  # Wait for MinIO to be ready
 
         for bucket in buckets:
-            # Create the bucket (ignore if exists)
-            commands.append(f'mc mb --ignore-existing minio/{bucket.name}')
+            # Create the bucket
+            commands.append(create_tpl.replace('{{NAME}}', bucket.name))
 
             # Enable versioning if requested
             if bucket.versioning:
-                commands.append(f'mc version enable minio/{bucket.name}')
+                commands.append(version_tpl.replace('{{NAME}}', bucket.name))
 
             # Enable object locking if requested
             if bucket.object_locking:
-                commands.append(
-                    f'mc retention set --default compliance 30d minio/{bucket.name}'
-                )
+                commands.append(retention_tpl.replace('{{NAME}}', bucket.name))
 
             # Set quota if specified
             if bucket.quota:
-                commands.append(f'mc quota set minio/{bucket.name} --size {bucket.quota}')
+                commands.append(
+                    quota_tpl.replace('{{NAME}}', bucket.name).replace('{{QUOTA}}', bucket.quota)
+                )
 
             # Set policy if specified
             if bucket.policy:
-                commands.append(f'mc anonymous set {bucket.policy} minio/{bucket.name}')
+                commands.append(
+                    policy_tpl.replace('{{NAME}}', bucket.name).replace('{{POLICY}}', bucket.policy)
+                )
 
         return ' && '.join(commands)
