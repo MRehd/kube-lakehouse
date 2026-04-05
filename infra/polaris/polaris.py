@@ -50,6 +50,17 @@ class CatalogArgs:
 
 
 @dataclass
+class PrincipalArgs:
+    '''Configuration for a Polaris principal (service account/user).'''
+
+    name: str
+    '''Name of the principal to create.'''
+
+    roles: List[str] = field(default_factory=list)
+    '''List of principal role names to assign to this principal.'''
+
+
+@dataclass
 class PolarisArgs:
     '''Configuration arguments for Apache Polaris deployment.'''
 
@@ -445,6 +456,76 @@ class Polaris(pulumi.ComponentResource):
         return Job(
             f'{name}-catalog-job',
             metadata={'namespace': args.namespace, 'labels': {'app': 'polaris-catalogs'}},
+            spec=spec,
+            opts=job_opts,
+        )
+
+    def create_principals(
+        self,
+        name: str,
+        principals: List['PrincipalArgs'],
+        opts: pulumi.ResourceOptions = None,
+    ) -> Job:
+        '''
+        Create principals and assign RBAC roles in Polaris via REST API.
+
+        Creates each principal if it doesn't exist, then assigns the specified
+        roles if not already assigned. Requires bootstrap to run first.
+
+        Args:
+            name: Unique name for the Pulumi resource.
+            principals: List of principal configurations with roles to assign.
+            opts: Optional Pulumi resource options.
+
+        Returns:
+            The Kubernetes Job resource that manages principals.
+
+        Example:
+            ```python
+            polaris = Polaris('my-polaris', PolarisArgs(namespace='data'))
+            bootstrap = polaris.create_bootstrap('polaris-bootstrap')
+
+            polaris.create_principals('principals', [
+                PrincipalArgs(name='spark-service', roles=['catalog_admin']),
+                PrincipalArgs(name='trino-service', roles=['data_reader']),
+            ], opts=pulumi.ResourceOptions(depends_on=[bootstrap]))
+            ```
+        '''
+        args = self._args
+        script_template = (CONFIG_DIR / 'scripts/manage_principals.sh').read_text()
+
+        def make_calls(principals: List['PrincipalArgs']) -> str:
+            '''Build shell commands for creating principals and assigning roles.'''
+            lines = []
+            for p in principals:
+                lines.append(f"create_principal '{p.name}'")
+                for role in p.roles:
+                    lines.append(f"assign_role '{p.name}' '{role}'")
+            return '\n'.join(lines)
+
+        def build_script(secret: str) -> str:
+            '''Replace template placeholders with resolved values.'''
+            return (
+                script_template
+                .replace('{{POLARIS_URL}}', self._polaris_url)
+                .replace('{{CLIENT_ID}}', self._root_client_id)
+                .replace('{{CLIENT_SECRET}}', secret)
+                .replace('{{PRINCIPAL_CALLS}}', make_calls(principals))
+            )
+
+        script = pulumi.Output.from_input(self._root_client_secret).apply(build_script)
+
+        # Load job spec and inject script
+        spec = json.loads((CONFIG_DIR / 'jobs/principal_job_spec.json').read_text())
+        spec['template']['spec']['containers'][0]['args'] = [script]
+
+        job_opts = pulumi.ResourceOptions(parent=self, depends_on=[self.chart])
+        if opts:
+            job_opts = pulumi.ResourceOptions.merge(job_opts, opts)
+
+        return Job(
+            f'{name}-principal-job',
+            metadata={'namespace': args.namespace, 'labels': {'app': 'polaris-principals'}},
             spec=spec,
             opts=job_opts,
         )

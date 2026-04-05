@@ -28,7 +28,7 @@ from pulumi_kubernetes.core.v1 import Namespace
 from pulumi_kubernetes.helm.v3 import Chart, ChartOpts, FetchOpts
 
 from minio import BucketArgs, Minio, MinioArgs
-from polaris import CatalogArgs, Polaris, PolarisArgs
+from polaris import CatalogArgs, Polaris, PolarisArgs, PrincipalArgs
 from psql import DatabaseArgs, GrantArgs, Psql, PsqlArgs, UserArgs
 from secrets import LakehouseSecrets, SecretArgs
 
@@ -304,6 +304,21 @@ polaris.create_catalogs(
             s3_secret_key=credentials['minio']['password'],
         ),
     ],
+    opts=pulumi.ResourceOptions(depends_on=[polaris_bootstrap]),
+)
+
+# Service principals for compute engines
+# Each principal needs permissions to create schemas, tables, and read/write data
+# The 'service_admin' role is a built-in Polaris role with full catalog access
+polaris_principals = [
+    {'name': 'spark', 'roles': ['service_admin']},
+    {'name': 'trino', 'roles': ['service_admin']},
+    {'name': 'flink', 'roles': ['service_admin']},
+]
+
+polaris.create_principals(
+    f'principals-{project_name}-{env}',
+    [PrincipalArgs(name=p['name'], roles=p['roles']) for p in polaris_principals],
     opts=pulumi.ResourceOptions(depends_on=[polaris_bootstrap]),
 )
 
