@@ -3,15 +3,16 @@
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, TypeVar
 
 import pulumi
-
-# Config directory for templates
-CONFIG_DIR = Path(__file__).parent.parent / 'config'
+from pulumi import Input, Output
 from pulumi_kubernetes.batch.v1 import Job
 from pulumi_kubernetes.helm.v3 import Chart, ChartOpts, FetchOpts
 from pulumi_kubernetes.networking.v1 import Ingress
+
+# Config directory for templates
+CONFIG_DIR = Path(__file__).parent.parent / 'config'
 
 
 @dataclass
@@ -38,7 +39,7 @@ class BucketArgs:
 class MinioArgs:
     '''Configuration arguments for MinIO deployment.'''
 
-    namespace: str = 'minio'
+    namespace: Input[str] = 'minio'
     '''Kubernetes namespace to deploy MinIO into (must already exist).'''
 
     mode: str = 'standalone'
@@ -50,8 +51,8 @@ class MinioArgs:
     root_user: str = 'admin'
     '''MinIO root/admin username.'''
 
-    root_password: Optional[str] = None
-    '''MinIO root/admin password. If not provided, a random one is generated.'''
+    root_password: Optional[Input[str]] = None
+    '''MinIO root/admin password. Can be a plain string or Pulumi Output (secret).'''
 
     persistence_enabled: bool = True
     '''Enable persistent storage for MinIO data.'''
@@ -125,6 +126,17 @@ class Minio(pulumi.ComponentResource):
         ```
     '''
 
+    T = TypeVar('T')
+
+    @staticmethod
+    def resolve(value: Input[T]) -> Output[T]:
+        '''Convert an Input[T] to Output[T] without modification.
+        
+        Use this to normalize values that may be plain types or Outputs
+        so you can use .apply() on them consistently.
+        '''
+        return Output.from_input(value)
+
     def __init__(
         self,
         name: str,
@@ -139,6 +151,10 @@ class Minio(pulumi.ComponentResource):
         # Helm release name determines K8s resource names
         self._release_name = args.release_name or name
 
+        # Resolve Input fields upfront
+        self._namespace = self.resolve(args.namespace)
+        self._root_password = self.resolve(args.root_password or 'minioadmin')
+
         # Build Helm values from args
         values = self._build_values(args)
 
@@ -148,7 +164,7 @@ class Minio(pulumi.ComponentResource):
             ChartOpts(
                 chart='minio',
                 version=args.chart_version,
-                namespace=args.namespace,
+                namespace=self._namespace,
                 fetch_opts=FetchOpts(
                     repo='https://charts.min.io/',
                 ),
@@ -158,13 +174,13 @@ class Minio(pulumi.ComponentResource):
         )
 
         # Export useful outputs
-        self.namespace = pulumi.Output.from_input(args.namespace)
+        self.namespace = self._namespace
         self.endpoint = pulumi.Output.concat(
-            'http://', self._release_name, '.', args.namespace,
+            'http://', self._release_name, '.', self._namespace,
             '.svc.', args.cluster_domain, ':', str(args.api_port)
         )
         self.console_endpoint = pulumi.Output.concat(
-            'http://', self._release_name, '-console.', args.namespace,
+            'http://', self._release_name, '-console.', self._namespace,
             '.svc.', args.cluster_domain, ':', str(args.console_port)
         )
 
@@ -177,8 +193,8 @@ class Minio(pulumi.ComponentResource):
 
             self.ingress = self._create_ingress(args)
 
-            self.api_url = pulumi.Output.from_input(f'http://{self.api_host}')
-            self.console_url = pulumi.Output.from_input(f'http://{self.console_host}')
+            self.api_url = self.resolve(f'http://{self.api_host}')
+            self.console_url = self.resolve(f'http://{self.console_host}')
         else:
             self.api_url = self.endpoint
             self.console_url = self.console_endpoint
@@ -204,7 +220,7 @@ class Minio(pulumi.ComponentResource):
         return Ingress(
             f'{self._release_name}-ingress',
             metadata={
-                'namespace': args.namespace,
+                'namespace': self._namespace,
                 'annotations': annotations,
             },
             spec={
@@ -330,11 +346,11 @@ class Minio(pulumi.ComponentResource):
             'http://',
             self._args.root_user,
             ':',
-            self._args.root_password or 'minioadmin',
+            self._root_password,
             '@',
             self._release_name,
             '.',
-            self._args.namespace,
+            self._namespace,
             '.svc.',
             self._args.cluster_domain,
             ':',
@@ -351,7 +367,7 @@ class Minio(pulumi.ComponentResource):
         return Job(
             f'{name}-bucket-job',
             metadata={
-                'namespace': self._args.namespace,
+                'namespace': self._namespace,
                 'labels': {'app': 'minio-bucket-provisioner'},
             },
             spec=spec,

@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Dict, List
 
 import pulumi
+from pulumi import Input
 from pulumi_kubernetes.core.v1 import Secret
 from pulumi_kubernetes.meta.v1 import ObjectMetaArgs
 
@@ -15,8 +16,8 @@ class SecretArgs:
     name: str
     '''Name of the Kubernetes secret.'''
 
-    data: Dict[str, pulumi.Output[str] | str]
-    '''Key-value pairs for the secret data.'''
+    data: Dict[str, Input[str]]
+    '''Key-value pairs for the secret data. Values can be plain strings or Pulumi Outputs.'''
 
 
 class LakehouseSecrets(pulumi.ComponentResource):

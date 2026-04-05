@@ -3,9 +3,10 @@
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, TypeVar, Union
 
 import pulumi
+from pulumi import Input, Output
 from pulumi_kubernetes.batch.v1 import Job
 from pulumi_kubernetes.helm.v3 import Chart, ChartOpts, FetchOpts
 
@@ -20,8 +21,8 @@ class UserArgs:
     name: str
     '''Username to create.'''
 
-    password: str
-    '''Password for the user.'''
+    password: Input[str]
+    '''Password for the user. Can be a plain string or a Pulumi Output (secret).'''
 
     superuser: bool = False
     '''Grant superuser privileges.'''
@@ -95,7 +96,7 @@ class DatabaseArgs:
 class PsqlArgs:
     '''Configuration arguments for PostgreSQL deployment.'''
 
-    namespace: str = 'postgresql'
+    namespace: Input[str] = 'postgresql'
     '''Kubernetes namespace to deploy PostgreSQL into (must already exist).'''
 
     architecture: str = 'standalone'
@@ -163,6 +164,17 @@ class Psql(pulumi.ComponentResource):
         ```
     '''
 
+    T = TypeVar('T')
+
+    @staticmethod
+    def resolve(value: Input[T]) -> Output[T]:
+        '''Convert an Input[T] to Output[T] without modification.
+        
+        Use this to normalize values that may be plain types or Outputs
+        so you can use .apply() on them consistently.
+        '''
+        return Output.from_input(value)
+
     def __init__(
         self,
         name: str,
@@ -177,6 +189,9 @@ class Psql(pulumi.ComponentResource):
         # Helm release name determines K8s resource names
         self._release_name = args.release_name or name
 
+        # Resolve Input fields upfront
+        self._namespace = self.resolve(args.namespace)
+
         # Build Helm values from args
         values = self._build_values(args)
 
@@ -186,7 +201,7 @@ class Psql(pulumi.ComponentResource):
             ChartOpts(
                 chart='postgresql',
                 version=args.chart_version,
-                namespace=args.namespace,
+                namespace=self._namespace,
                 fetch_opts=FetchOpts(
                     repo='https://charts.bitnami.com/bitnami',
                 ),
@@ -196,15 +211,15 @@ class Psql(pulumi.ComponentResource):
         )
 
         # Export useful outputs
-        self.namespace = pulumi.Output.from_input(args.namespace)
+        self.namespace = self._namespace
         self.host = pulumi.Output.concat(
-            self._release_name, '.', args.namespace,
+            self._release_name, '.', self._namespace,
             '.svc.', args.cluster_domain
         )
         self.endpoint = pulumi.Output.concat(
             self.host, ':', str(args.port)
         )
-        self.secret_name = pulumi.Output.from_input(args.existing_secret)
+        self.secret_name = self.resolve(args.existing_secret)
 
         self.register_outputs({
             'namespace': self.namespace,
@@ -291,7 +306,7 @@ shared_buffers = {args.shared_buffers}
         spec = json.loads((CONFIG_DIR / 'jobs/psql_job_spec.json').read_text())
         container = spec['template']['spec']['containers'][0]
         container['env'][0]['value'] = pulumi.Output.concat(
-            self._release_name, '.', self._args.namespace,
+            self._release_name, '.', self._namespace,
             '.svc.', self._args.cluster_domain
         )
         container['env'][1]['value'] = str(self._args.port)
@@ -304,7 +319,7 @@ shared_buffers = {args.shared_buffers}
 
         return Job(
             f'{name}-db-job',
-            metadata={'namespace': self._args.namespace, 'labels': {'app': 'postgres-db-provisioner'}},
+            metadata={'namespace': self._namespace, 'labels': {'app': 'postgres-db-provisioner'}},
             spec=spec,
             opts=job_opts,
         )
@@ -390,7 +405,7 @@ shared_buffers = {args.shared_buffers}
         spec = json.loads((CONFIG_DIR / 'jobs/psql_job_spec.json').read_text())
         container = spec['template']['spec']['containers'][0]
         container['env'][0]['value'] = pulumi.Output.concat(
-            self._release_name, '.', self._args.namespace,
+            self._release_name, '.', self._namespace,
             '.svc.', self._args.cluster_domain
         )
         container['env'][1]['value'] = str(self._args.port)
@@ -403,7 +418,7 @@ shared_buffers = {args.shared_buffers}
 
         return Job(
             f'{name}-user-job',
-            metadata={'namespace': self._args.namespace, 'labels': {'app': 'postgres-user-provisioner'}},
+            metadata={'namespace': self._namespace, 'labels': {'app': 'postgres-user-provisioner'}},
             spec=spec,
             opts=job_opts,
         )
@@ -417,7 +432,7 @@ shared_buffers = {args.shared_buffers}
         grant_table_tpl = (scripts_dir / 'grant_table.sql').read_text()
 
         def resolve_user(user: UserArgs) -> pulumi.Output[dict]:
-            return pulumi.Output.from_input(user.password).apply(lambda pw: {
+            return self.resolve(user.password).apply(lambda pw: {
                 'name': user.name,
                 'password': pw,
                 'superuser': user.superuser,

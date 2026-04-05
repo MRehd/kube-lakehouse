@@ -3,9 +3,10 @@
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, TypeVar
 
 import pulumi
+from pulumi import Input, Output
 from pulumi_kubernetes.batch.v1 import Job
 from pulumi_kubernetes.helm.v3 import Chart, ChartOpts, FetchOpts
 from pulumi_kubernetes.networking.v1 import Ingress
@@ -21,17 +22,17 @@ class CatalogArgs:
     name: str
     '''Name of the catalog to create.'''
 
-    s3_endpoint: str
-    '''S3/MinIO endpoint URL (e.g., 'http://minio.namespace.svc.cluster.local:9000').'''
+    s3_endpoint: Input[str]
+    '''S3/MinIO endpoint URL. Can be a plain string or Pulumi Output.'''
 
     s3_bucket: str
     '''S3/MinIO bucket name for the catalog's warehouse location.'''
 
-    s3_access_key: str
-    '''S3/MinIO access key ID.'''
+    s3_access_key: Input[str]
+    '''S3/MinIO access key ID. Can be a plain string or Pulumi Output (secret).'''
 
-    s3_secret_key: str
-    '''S3/MinIO secret access key.'''
+    s3_secret_key: Input[str]
+    '''S3/MinIO secret access key. Can be a plain string or Pulumi Output (secret).'''
 
     s3_path_style_access: bool = True
     '''Use path-style access (required for MinIO).'''
@@ -86,7 +87,7 @@ class RoleArgs:
 class PolarisArgs:
     '''Configuration arguments for Apache Polaris deployment.'''
 
-    namespace: str = 'polaris'
+    namespace: Input[str] = 'polaris'
     '''Kubernetes namespace to deploy Polaris into (must already exist).'''
 
     persistence_type: str = 'relational-jdbc'
@@ -201,6 +202,17 @@ class Polaris(pulumi.ComponentResource):
         ```
     '''
 
+    T = TypeVar('T')
+
+    @staticmethod
+    def resolve(value: Input[T]) -> Output[T]:
+        '''Convert an Input[T] to Output[T] without modification.
+        
+        Use this to normalize values that may be plain types or Outputs
+        so you can use .apply() on them consistently.
+        '''
+        return Output.from_input(value)
+
     def __init__(
         self,
         name: str,
@@ -218,7 +230,10 @@ class Polaris(pulumi.ComponentResource):
         self._mgmt_url = f'http://{self._release_name}:{args.management_port}'
         # Bootstrap credentials (set by create_bootstrap, used by create_catalogs)
         self._root_client_id: str = 'root'
-        self._root_client_secret: pulumi.Input[str] = 'root'
+        self._root_client_secret: Output[str] = self.resolve('root')
+
+        # Resolve Input fields upfront
+        self._namespace = self.resolve(args.namespace)
 
         # Build Helm values from args
         values = self._build_values(args)
@@ -229,7 +244,7 @@ class Polaris(pulumi.ComponentResource):
             ChartOpts(
                 chart='polaris',
                 version=args.chart_version,
-                namespace=args.namespace,
+                namespace=self._namespace,
                 fetch_opts=FetchOpts(
                     repo=args.chart_repo,
                 ),
@@ -239,16 +254,16 @@ class Polaris(pulumi.ComponentResource):
         )
 
         # Export useful outputs
-        self.namespace = pulumi.Output.from_input(args.namespace)
+        self.namespace = self._namespace
         self.host = pulumi.Output.concat(
-            self._release_name, '.', args.namespace,
+            self._release_name, '.', self._namespace,
             '.svc.', args.cluster_domain
         )
         self.endpoint = pulumi.Output.concat(
             'http://', self.host, ':', str(args.service_port)
         )
         self.management_endpoint = pulumi.Output.concat(
-            'http://', self._release_name, '.', args.namespace,
+            'http://', self._release_name, '.', self._namespace,
             '.svc.', args.cluster_domain, ':', str(args.management_port)
         )
 
@@ -257,7 +272,7 @@ class Polaris(pulumi.ComponentResource):
         if args.ingress_enabled and args.ingress_domain:
             self.api_host = f'polaris.{args.ingress_domain}'
             self.ingress = self._create_ingress(args)
-            self.api_url = pulumi.Output.from_input(f'http://{self.api_host}')
+            self.api_url = self.resolve(f'http://{self.api_host}')
         else:
             self.api_url = self.endpoint
 
@@ -287,7 +302,7 @@ class Polaris(pulumi.ComponentResource):
 
         return Ingress(
             f'{self._release_name}-ingress',
-            metadata={'namespace': args.namespace, 'annotations': annotations},
+            metadata={'namespace': self._namespace, 'annotations': annotations},
             spec=spec,
             opts=pulumi.ResourceOptions(parent=self, depends_on=[self.chart]),
         )
@@ -389,7 +404,7 @@ class Polaris(pulumi.ComponentResource):
 
         # Store credentials for use by create_catalogs
         self._root_client_id = root_client_id
-        self._root_client_secret = root_client_secret
+        self._root_client_secret = self.resolve(root_client_secret)
 
         # Build the bootstrap arguments
         realm = args.realms[0] if args.realms else 'POLARIS'
@@ -398,7 +413,7 @@ class Polaris(pulumi.ComponentResource):
         script_template = (CONFIG_DIR / 'scripts/bootstrap.sh').read_text()
 
         # Build bootstrap script with resolved credentials
-        bootstrap_script = pulumi.Output.from_input(root_client_secret).apply(
+        bootstrap_script = self._root_client_secret.apply(
             lambda secret: script_template
             .replace('{{REALM}}', realm)
             .replace('{{CREDENTIAL}}', f'{realm},{root_client_id},{secret}')
@@ -423,7 +438,7 @@ class Polaris(pulumi.ComponentResource):
 
         return Job(
             f'{name}-bootstrap-job',
-            metadata={'namespace': args.namespace, 'labels': {'app': 'polaris-bootstrap'}},
+            metadata={'namespace': self._namespace, 'labels': {'app': 'polaris-bootstrap'}},
             spec=spec,
             opts=job_opts,
         )
@@ -477,7 +492,7 @@ class Polaris(pulumi.ComponentResource):
 
         return Job(
             f'{name}-catalog-job',
-            metadata={'namespace': args.namespace, 'labels': {'app': 'polaris-catalogs'}},
+            metadata={'namespace': self._namespace, 'labels': {'app': 'polaris-catalogs'}},
             spec=spec,
             opts=job_opts,
         )
@@ -535,7 +550,7 @@ class Polaris(pulumi.ComponentResource):
                 .replace('{{PRINCIPAL_CALLS}}', make_calls(principals))
             )
 
-        script = pulumi.Output.from_input(self._root_client_secret).apply(build_script)
+        script = self._root_client_secret.apply(build_script)
 
         # Load job spec and inject script
         spec = json.loads((CONFIG_DIR / 'jobs/principal_job_spec.json').read_text())
@@ -547,7 +562,7 @@ class Polaris(pulumi.ComponentResource):
 
         return Job(
             f'{name}-principal-job',
-            metadata={'namespace': args.namespace, 'labels': {'app': 'polaris-principals'}},
+            metadata={'namespace': self._namespace, 'labels': {'app': 'polaris-principals'}},
             spec=spec,
             opts=job_opts,
         )
@@ -611,7 +626,7 @@ class Polaris(pulumi.ComponentResource):
                 .replace('{{ROLE_CALLS}}', make_calls(roles))
             )
 
-        script = pulumi.Output.from_input(self._root_client_secret).apply(build_script)
+        script = self._root_client_secret.apply(build_script)
 
         # Load job spec and inject script
         spec = json.loads((CONFIG_DIR / 'jobs/role_job_spec.json').read_text())
@@ -623,7 +638,7 @@ class Polaris(pulumi.ComponentResource):
 
         return Job(
             f'{name}-role-job',
-            metadata={'namespace': args.namespace, 'labels': {'app': 'polaris-roles'}},
+            metadata={'namespace': self._namespace, 'labels': {'app': 'polaris-roles'}},
             spec=spec,
             opts=job_opts,
         )
