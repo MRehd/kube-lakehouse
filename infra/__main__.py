@@ -279,33 +279,33 @@ polaris_bootstrap = polaris.create_bootstrap(
 
 # Create Polaris catalogs for each medallion layer
 # Each catalog is backed by a MinIO bucket for S3 storage
-# polaris.create_catalogs(
-#     f'catalogs-{project_name}-{env}',
-#     [
-#         CatalogArgs(
-#             name='bronze',
-#             s3_endpoint=minio.endpoint,
-#             s3_bucket='bronze',
-#             s3_access_key=credentials['minio']['user'],
-#             s3_secret_key=credentials['minio']['password'],
-#         ),
-#         CatalogArgs(
-#             name='silver',
-#             s3_endpoint=minio.endpoint,
-#             s3_bucket='silver',
-#             s3_access_key=credentials['minio']['user'],
-#             s3_secret_key=credentials['minio']['password'],
-#         ),
-#         CatalogArgs(
-#             name='gold',
-#             s3_endpoint=minio.endpoint,
-#             s3_bucket='gold',
-#             s3_access_key=credentials['minio']['user'],
-#             s3_secret_key=credentials['minio']['password'],
-#         ),
-#     ],
-#     opts=pulumi.ResourceOptions(depends_on=[polaris_bootstrap]),
-# )
+polaris.create_catalogs(
+    f'catalogs-{project_name}-{env}',
+    [
+        CatalogArgs(
+            name='bronze',
+            s3_endpoint=minio.endpoint,
+            s3_bucket='bronze',
+            s3_access_key=credentials['minio']['user'],
+            s3_secret_key=credentials['minio']['password'],
+        ),
+        CatalogArgs(
+            name='silver',
+            s3_endpoint=minio.endpoint,
+            s3_bucket='silver',
+            s3_access_key=credentials['minio']['user'],
+            s3_secret_key=credentials['minio']['password'],
+        ),
+        CatalogArgs(
+            name='gold',
+            s3_endpoint=minio.endpoint,
+            s3_bucket='gold',
+            s3_access_key=credentials['minio']['user'],
+            s3_secret_key=credentials['minio']['password'],
+        ),
+    ],
+    opts=pulumi.ResourceOptions(depends_on=[polaris_bootstrap]),
+)
 
 
 # =============================================================================

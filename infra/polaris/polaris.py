@@ -177,6 +177,8 @@ class Polaris(pulumi.ComponentResource):
         self._name = name
         # Helm release name determines K8s resource names
         self._release_name = args.release_name or name
+        self._polaris_url = f'http://{self._release_name}:{args.service_port}'
+        self._mgmt_url = f'http://{self._release_name}:{args.management_port}'
         # Bootstrap credentials (set by create_bootstrap, used by create_catalogs)
         self._root_client_id: str = 'root'
         self._root_client_secret: pulumi.Input[str] = 'root'
@@ -419,18 +421,19 @@ class Polaris(pulumi.ComponentResource):
                 'backoffLimit': 3,
                 'template': {
                     'spec': {
-                        'restartPolicy': 'OnFailure',
+                        'restartPolicy': 'Never',
                         'containers': [
                             {
                                 'name': 'polaris-bootstrap',
                                 'image': f'apache/polaris-admin-tool:{args.image_tag}',
-                                # The admin-tool image has an entrypoint, just pass args
-                                'args': [
-                                    'bootstrap',
-                                    '-r', realm,
-                                    '-c', credential_arg,
-                                    '-p',
-                                ],
+                                # Use Java directly; exit code 3 (already bootstrapped) treated as success
+                                'command': ['/bin/sh', '-c'],
+                                'args': [pulumi.Output.from_input(credential_arg).apply(
+                                    lambda cred: f'''
+java -jar /deployments/polaris-admin-tool.jar bootstrap -r {realm} -c "{cred}" -p
+rc=$?; [ $rc -eq 0 ] || [ $rc -eq 3 ] && exit 0 || exit $rc
+'''
+                                )],
                                 'env': [
                                     # Persistence type
                                     {
@@ -468,6 +471,85 @@ class Polaris(pulumi.ComponentResource):
                                 ],
                             },
                         ],
+                    },
+                },
+            },
+            opts=job_opts,
+        )
+
+    def create_catalogs(
+        self,
+        name: str,
+        catalogs: List[CatalogArgs],
+        opts: pulumi.ResourceOptions = None,
+    ) -> Job:
+        '''Create catalogs in Polaris via REST API. Requires bootstrap to run first.'''
+        args = self._args
+        realm = args.realms[0] if args.realms else 'POLARIS'
+
+        # Collect all potential Output values from catalogs
+        all_inputs = [self._root_client_secret]
+        for cat in catalogs:
+            all_inputs.extend([cat.s3_access_key, cat.s3_secret_key, cat.s3_endpoint])
+
+        def build_script(resolved):
+            secret = resolved[0]
+            idx = 1
+            catalog_cmds = []
+            for cat in catalogs:
+                access_key, secret_key, endpoint = resolved[idx], resolved[idx+1], resolved[idx+2]
+                idx += 3
+                base_loc = cat.default_base_location or f's3://{cat.s3_bucket}/'
+                payload = {
+                    'name': cat.name, 'type': cat.catalog_type,
+                    'properties': {'default-base-location': base_loc},
+                    'storageConfigInfo': {
+                        'storageType': 'S3',
+                        'allowedLocations': [f's3://{cat.s3_bucket}/'],
+                        's3.endpoint': endpoint, 's3.access-key-id': access_key,
+                        's3.secret-access-key': secret_key, 's3.region': cat.s3_region,
+                        's3.path-style-access': str(cat.s3_path_style_access).lower(),
+                    },
+                }
+                catalog_cmds.append(
+                    f"curl -sf -X POST '{self._polaris_url}/api/management/v1/catalogs' "
+                    f"-H 'Authorization: Bearer '$TOKEN -H 'Content-Type: application/json' "
+                    f"-d '{json.dumps(payload)}' || echo 'Catalog {cat.name} may already exist'"
+                )
+            return f'''
+for i in $(seq 1 30); do
+  TOKEN=$(curl -sf -X POST '{self._polaris_url}/api/catalog/v1/oauth/tokens' \
+    -d 'grant_type=client_credentials&client_id={self._root_client_id}&client_secret={secret}&scope=PRINCIPAL_ROLE:ALL' \
+    | sed 's/.*"access_token":"\\([^"]*\\)".*/\\1/')
+  [ -n "$TOKEN" ] && break
+  sleep 2
+done
+[ -z "$TOKEN" ] && echo "Failed to get token" && exit 1
+{chr(10).join(catalog_cmds)}
+echo "Done"
+'''
+
+        script = pulumi.Output.all(*all_inputs).apply(build_script)
+
+        job_opts = pulumi.ResourceOptions(parent=self, depends_on=[self.chart])
+        if opts:
+            job_opts = pulumi.ResourceOptions.merge(job_opts, opts)
+
+        return Job(
+            f'{name}-catalog-job',
+            metadata={'namespace': args.namespace, 'labels': {'app': 'polaris-catalogs'}},
+            spec={
+                'ttlSecondsAfterFinished': 300,
+                'backoffLimit': 3,
+                'template': {
+                    'spec': {
+                        'restartPolicy': 'OnFailure',
+                        'containers': [{
+                            'name': 'create-catalogs',
+                            'image': 'curlimages/curl:latest',
+                            'command': ['/bin/sh', '-c'],
+                            'args': [script],
+                        }],
                     },
                 },
             },
