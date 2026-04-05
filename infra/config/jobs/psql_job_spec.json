@@ -1,0 +1,22 @@
+{
+  "ttlSecondsAfterFinished": 300,
+  "backoffLimit": 3,
+  "template": {
+    "spec": {
+      "restartPolicy": "OnFailure",
+      "containers": [
+        {
+          "name": "psql",
+          "image": "postgres:16-alpine",
+          "command": ["/bin/sh", "-c"],
+          "env": [
+            {"name": "PGHOST", "value": ""},
+            {"name": "PGPORT", "value": "5432"},
+            {"name": "PGUSER", "value": "postgres"},
+            {"name": "PGPASSWORD", "valueFrom": {"secretKeyRef": {"name": "", "key": "password"}}}
+          ]
+        }
+      ]
+    }
+  }
+}

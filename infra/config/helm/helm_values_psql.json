@@ -1,0 +1,32 @@
+{
+  "fullnameOverride": "",
+  "architecture": "standalone",
+  "image": {
+    "tag": "latest"
+  },
+  "primary": {
+    "persistence": {
+      "enabled": true,
+      "size": "10Gi",
+      "storageClass": "hostpath"
+    },
+    "resources": {
+      "requests": {"memory": "256Mi", "cpu": "250m"},
+      "limits": {"memory": "512Mi", "cpu": "500m"}
+    },
+    "extendedConfiguration": "",
+    "service": {
+      "type": "ClusterIP",
+      "ports": {
+        "postgresql": 5432
+      }
+    }
+  },
+  "auth": {
+    "database": "postgres",
+    "existingSecret": "",
+    "secretKeys": {
+      "adminPasswordKey": "password"
+    }
+  }
+}

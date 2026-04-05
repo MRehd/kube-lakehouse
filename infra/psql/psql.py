@@ -1,11 +1,16 @@
 '''Reusable PostgreSQL component for Kubernetes using Helm charts.'''
 
+import json
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import List, Optional
 
 import pulumi
 from pulumi_kubernetes.batch.v1 import Job
 from pulumi_kubernetes.helm.v3 import Chart, ChartOpts, FetchOpts
+
+# Config directory for templates
+CONFIG_DIR = Path(__file__).parent.parent / 'config'
 
 
 @dataclass
@@ -210,38 +215,23 @@ class Psql(pulumi.ComponentResource):
 
     def _build_values(self, args: PsqlArgs) -> dict:
         '''Build Helm chart values from PsqlArgs.'''
-        values = {
-            'fullnameOverride': self._release_name,
-            'architecture': args.architecture,
-            'image': {
-                'tag': 'latest',
-            },
-            'primary': {
-                'persistence': {
-                    'enabled': args.persistence_enabled,
-                    'size': args.persistence_size,
-                    'storageClass': args.storage_class,
-                },
-                'resources': args.resources,
-                'extendedConfiguration': f'''
+        values = json.loads((CONFIG_DIR / 'helm/helm_values_psql.json').read_text())
+
+        # Override with args
+        values['fullnameOverride'] = self._release_name
+        values['architecture'] = args.architecture
+        values['primary']['persistence']['enabled'] = args.persistence_enabled
+        values['primary']['persistence']['size'] = args.persistence_size
+        values['primary']['persistence']['storageClass'] = args.storage_class
+        values['primary']['resources'] = args.resources
+        values['primary']['extendedConfiguration'] = f'''
 max_connections = {args.max_connections}
 shared_buffers = {args.shared_buffers}
-''',
-                'service': {
-                    'type': args.service_type,
-                    'ports': {
-                        'postgresql': args.port,
-                    },
-                },
-            },
-            'auth': {
-                'database': args.database,
-                'existingSecret': args.existing_secret,
-                'secretKeys': {
-                    'adminPasswordKey': 'password',
-                },
-            },
-        }
+'''
+        values['primary']['service']['type'] = args.service_type
+        values['primary']['service']['ports']['postgresql'] = args.port
+        values['auth']['database'] = args.database
+        values['auth']['existingSecret'] = args.existing_secret
 
         # Merge extra values (allowing overrides)
         values = self._deep_merge(values, args.extra_values)
@@ -297,73 +287,25 @@ shared_buffers = {args.shared_buffers}
         # Build the psql commands for each database
         commands = self._build_psql_commands(databases)
 
-        job_opts = pulumi.ResourceOptions(
-            parent=self,
-            depends_on=[self.chart],
+        # Load job spec and configure
+        spec = json.loads((CONFIG_DIR / 'jobs/psql_job_spec.json').read_text())
+        container = spec['template']['spec']['containers'][0]
+        container['args'] = [commands]
+        container['env'][0]['value'] = pulumi.Output.concat(
+            self._release_name, '.', self._args.namespace,
+            '.svc.', self._args.cluster_domain
         )
+        container['env'][1]['value'] = str(self._args.port)
+        container['env'][3]['valueFrom']['secretKeyRef']['name'] = self._args.existing_secret
+
+        job_opts = pulumi.ResourceOptions(parent=self, depends_on=[self.chart])
         if opts:
             job_opts = pulumi.ResourceOptions.merge(job_opts, opts)
 
         return Job(
             f'{name}-db-job',
-            metadata={
-                'namespace': self._args.namespace,
-                'labels': {'app': 'postgres-db-provisioner'},
-            },
-            spec={
-                # Auto-delete the Job 5 minutes after it completes (cleanup)
-                'ttlSecondsAfterFinished': 300,
-                # Retry up to 3 times if the Job fails
-                'backoffLimit': 3,
-                'template': {
-                    'spec': {
-                        # Only restart the pod on failure, not on success
-                        'restartPolicy': 'OnFailure',
-                        'containers': [
-                            {
-                                'name': 'psql',
-                                # Official PostgreSQL image includes psql client
-                                'image': 'postgres:16-alpine',
-                                # Run commands via shell
-                                'command': ['/bin/sh', '-c'],
-                                # The actual psql commands to create databases
-                                'args': [commands],
-                                'env': [
-                                    {
-                                        # PGHOST sets the target PostgreSQL host
-                                        'name': 'PGHOST',
-                                        'value': pulumi.Output.concat(
-                                            self._release_name,
-                                            '.',
-                                            self._args.namespace,
-                                            '.svc.',
-                                            self._args.cluster_domain,
-                                        ),
-                                    },
-                                    {
-                                        'name': 'PGPORT',
-                                        'value': str(self._args.port),
-                                    },
-                                    {
-                                        'name': 'PGUSER',
-                                        'value': 'postgres',
-                                    },
-                                    {
-                                        # PGPASSWORD from existing secret
-                                        'name': 'PGPASSWORD',
-                                        'valueFrom': {
-                                            'secretKeyRef': {
-                                                'name': self._args.existing_secret,
-                                                'key': 'password',
-                                            },
-                                        },
-                                    },
-                                ],
-                            },
-                        ],
-                    },
-                },
-            },
+            metadata={'namespace': self._args.namespace, 'labels': {'app': 'postgres-db-provisioner'}},
+            spec=spec,
             opts=job_opts,
         )
 
@@ -445,73 +387,25 @@ shared_buffers = {args.shared_buffers}
         # Build the psql commands for each user
         commands = self._build_user_commands(users)
 
-        job_opts = pulumi.ResourceOptions(
-            parent=self,
-            depends_on=[self.chart],
+        # Load job spec and configure
+        spec = json.loads((CONFIG_DIR / 'jobs/psql_job_spec.json').read_text())
+        container = spec['template']['spec']['containers'][0]
+        container['args'] = [commands]
+        container['env'][0]['value'] = pulumi.Output.concat(
+            self._release_name, '.', self._args.namespace,
+            '.svc.', self._args.cluster_domain
         )
+        container['env'][1]['value'] = str(self._args.port)
+        container['env'][3]['valueFrom']['secretKeyRef']['name'] = self._args.existing_secret
+
+        job_opts = pulumi.ResourceOptions(parent=self, depends_on=[self.chart])
         if opts:
             job_opts = pulumi.ResourceOptions.merge(job_opts, opts)
 
         return Job(
             f'{name}-user-job',
-            metadata={
-                'namespace': self._args.namespace,
-                'labels': {'app': 'postgres-user-provisioner'},
-            },
-            spec={
-                # Auto-delete the Job 5 minutes after it completes (cleanup)
-                'ttlSecondsAfterFinished': 300,
-                # Retry up to 3 times if the Job fails
-                'backoffLimit': 3,
-                'template': {
-                    'spec': {
-                        # Only restart the pod on failure, not on success
-                        'restartPolicy': 'OnFailure',
-                        'containers': [
-                            {
-                                'name': 'psql',
-                                # Official PostgreSQL image includes psql client
-                                'image': 'postgres:16-alpine',
-                                # Run commands via shell
-                                'command': ['/bin/sh', '-c'],
-                                # The actual psql commands to create users
-                                'args': [commands],
-                                'env': [
-                                    {
-                                        # PGHOST sets the target PostgreSQL host
-                                        'name': 'PGHOST',
-                                        'value': pulumi.Output.concat(
-                                            self._release_name,
-                                            '.',
-                                            self._args.namespace,
-                                            '.svc.',
-                                            self._args.cluster_domain,
-                                        ),
-                                    },
-                                    {
-                                        'name': 'PGPORT',
-                                        'value': str(self._args.port),
-                                    },
-                                    {
-                                        'name': 'PGUSER',
-                                        'value': 'postgres',
-                                    },
-                                    {
-                                        # PGPASSWORD from existing secret
-                                        'name': 'PGPASSWORD',
-                                        'valueFrom': {
-                                            'secretKeyRef': {
-                                                'name': self._args.existing_secret,
-                                                'key': 'password',
-                                            },
-                                        },
-                                    },
-                                ],
-                            },
-                        ],
-                    },
-                },
-            },
+            metadata={'namespace': self._args.namespace, 'labels': {'app': 'postgres-user-provisioner'}},
+            spec=spec,
             opts=job_opts,
         )
 
