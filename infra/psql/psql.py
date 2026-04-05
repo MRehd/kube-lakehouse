@@ -515,67 +515,92 @@ shared_buffers = {args.shared_buffers}
             opts=job_opts,
         )
 
-    def _build_user_commands(self, users: List[UserArgs]) -> str:
-        '''Build the shell commands to create and configure users.'''
-        commands = [
-            'sleep 5',  # Wait for PostgreSQL to be ready
-        ]
+    def _build_user_commands(self, users: List[UserArgs]) -> pulumi.Output[str]:
+        '''
+        Build the shell commands to create and configure users.
+        
+        Handles Pulumi Outputs in user arguments (e.g., passwords from secrets).
+        '''
+        # Resolve each user's password (which may be a Pulumi Output) 
+        def resolve_user(user: UserArgs) -> pulumi.Output[dict]:
+            return pulumi.Output.from_input(user.password).apply(lambda pw: {
+                'name': user.name,
+                'password': pw,
+                'superuser': user.superuser,
+                'createdb': user.createdb,
+                'createrole': user.createrole,
+                'login': user.login,
+                'connection_limit': user.connection_limit,
+                'valid_until': user.valid_until,
+                'grants': user.grants,
+            })
+        
+        resolved_user_outputs = [resolve_user(u) for u in users]
+        
+        def build_script(resolved_users: List[dict]) -> str:
+            commands = [
+                'sleep 5',  # Wait for PostgreSQL to be ready
+            ]
 
-        for user in users:
-            # Build CREATE ROLE options
-            options = []
-            options.append('SUPERUSER' if user.superuser else 'NOSUPERUSER')
-            options.append('CREATEDB' if user.createdb else 'NOCREATEDB')
-            options.append('CREATEROLE' if user.createrole else 'NOCREATEROLE')
-            options.append('LOGIN' if user.login else 'NOLOGIN')
-            options.append(f"PASSWORD '{user.password}'")
-            
-            if user.connection_limit != -1:
-                options.append(f'CONNECTION LIMIT {user.connection_limit}')
-            
-            if user.valid_until:
-                options.append(f"VALID UNTIL '{user.valid_until}'")
+            for user in resolved_users:
+                # Build CREATE ROLE options
+                options = []
+                options.append('SUPERUSER' if user['superuser'] else 'NOSUPERUSER')
+                options.append('CREATEDB' if user['createdb'] else 'NOCREATEDB')
+                options.append('CREATEROLE' if user['createrole'] else 'NOCREATEROLE')
+                options.append('LOGIN' if user['login'] else 'NOLOGIN')
+                # Escape single quotes in password for SQL
+                escaped_pw = user['password'].replace("'", "''")
+                options.append(f"PASSWORD '{escaped_pw}'")
+                
+                if user['connection_limit'] != -1:
+                    options.append(f"CONNECTION LIMIT {user['connection_limit']}")
+                
+                if user['valid_until']:
+                    options.append(f"VALID UNTIL '{user['valid_until']}'")
 
-            options_str = ' '.join(options)
+                options_str = ' '.join(options)
 
-            # Create or alter user (idempotent)
-            create_user_cmd = f"psql -tc \"SELECT 1 FROM pg_roles WHERE rolname = '{user.name}'\" | grep -q 1"
-            create_user_cmd += f" && psql -c \"ALTER USER {user.name} WITH {options_str}\""
-            create_user_cmd += f" || psql -c \"CREATE USER {user.name} WITH {options_str}\""
-            
-            commands.append(create_user_cmd)
-            commands.append(f"echo 'User {user.name} ready'")
+                # Create or alter user (idempotent)
+                create_user_cmd = f"psql -tc \"SELECT 1 FROM pg_roles WHERE rolname = '{user['name']}'\" | grep -q 1"
+                create_user_cmd += f" && psql -c \"ALTER USER {user['name']} WITH {options_str}\""
+                create_user_cmd += f" || psql -c \"CREATE USER {user['name']} WITH {options_str}\""
+                
+                commands.append(create_user_cmd)
+                commands.append(f"echo 'User {user['name']} ready'")
 
-            # Process grants if specified
-            if user.grants:
-                for grant in user.grants:
-                    privileges = ', '.join(grant.privileges)
-                    grant_option = ' WITH GRANT OPTION' if grant.grant_option else ''
-                    
-                    # Grant connect on database
-                    commands.append(
-                        f"psql -c \"GRANT CONNECT ON DATABASE {grant.database} TO {user.name}\""
-                    )
-                    
-                    # Grant privileges on each schema
-                    for schema in grant.schemas:
-                        # Grant usage on schema
+                # Process grants if specified
+                if user['grants']:
+                    for grant in user['grants']:
+                        privileges = ', '.join(grant.privileges)
+                        grant_option = ' WITH GRANT OPTION' if grant.grant_option else ''
+                        
+                        # Grant connect on database
                         commands.append(
-                            f"psql -d {grant.database} -c \"GRANT USAGE ON SCHEMA {schema} TO {user.name}\""
+                            f"psql -c \"GRANT CONNECT ON DATABASE {grant.database} TO {user['name']}\""
                         )
                         
-                        # Grant privileges on tables
-                        if grant.tables == 'ALL TABLES':
+                        # Grant privileges on each schema
+                        for schema in grant.schemas:
+                            # Grant usage on schema
                             commands.append(
-                                f"psql -d {grant.database} -c \"GRANT {privileges} ON ALL TABLES IN SCHEMA {schema} TO {user.name}{grant_option}\""
+                                f"psql -d {grant.database} -c \"GRANT USAGE ON SCHEMA {schema} TO {user['name']}\""
                             )
-                            # Also grant on future tables
-                            commands.append(
-                                f"psql -d {grant.database} -c \"ALTER DEFAULT PRIVILEGES IN SCHEMA {schema} GRANT {privileges} ON TABLES TO {user.name}{grant_option}\""
-                            )
-                        else:
-                            commands.append(
-                                f"psql -d {grant.database} -c \"GRANT {privileges} ON TABLE {schema}.{grant.tables} TO {user.name}{grant_option}\""
-                            )
+                            
+                            # Grant privileges on tables
+                            if grant.tables == 'ALL TABLES':
+                                commands.append(
+                                    f"psql -d {grant.database} -c \"GRANT {privileges} ON ALL TABLES IN SCHEMA {schema} TO {user['name']}{grant_option}\""
+                                )
+                                # Also grant on future tables
+                                commands.append(
+                                    f"psql -d {grant.database} -c \"ALTER DEFAULT PRIVILEGES IN SCHEMA {schema} GRANT {privileges} ON TABLES TO {user['name']}{grant_option}\""
+                                )
+                            else:
+                                commands.append(
+                                    f"psql -d {grant.database} -c \"GRANT {privileges} ON TABLE {schema}.{grant.tables} TO {user['name']}{grant_option}\""
+                                )
 
-        return ' && '.join(commands)
+            return ' && '.join(commands)
+        
+        return pulumi.Output.all(*resolved_user_outputs).apply(build_script)
