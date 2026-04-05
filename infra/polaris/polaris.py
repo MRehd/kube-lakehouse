@@ -61,6 +61,28 @@ class PrincipalArgs:
 
 
 @dataclass
+class CatalogGrantArgs:
+    '''Configuration for granting a catalog role to a principal role.'''
+
+    catalog: str
+    '''Name of the catalog to grant access to.'''
+
+    role: str = 'catalog_admin'
+    '''Catalog role to grant (e.g., 'catalog_admin', built-in roles).'''
+
+
+@dataclass
+class RoleArgs:
+    '''Configuration for a Polaris principal role (RBAC role).'''
+
+    name: str
+    '''Name of the principal role to create.'''
+
+    catalog_grants: List[CatalogGrantArgs] = field(default_factory=list)
+    '''List of catalog grants for this role.'''
+
+
+@dataclass
 class PolarisArgs:
     '''Configuration arguments for Apache Polaris deployment.'''
 
@@ -526,6 +548,82 @@ class Polaris(pulumi.ComponentResource):
         return Job(
             f'{name}-principal-job',
             metadata={'namespace': args.namespace, 'labels': {'app': 'polaris-principals'}},
+            spec=spec,
+            opts=job_opts,
+        )
+
+    def create_roles(
+        self,
+        name: str,
+        roles: List['RoleArgs'],
+        opts: pulumi.ResourceOptions = None,
+    ) -> Job:
+        '''
+        Create principal roles and grant catalog access in Polaris via REST API.
+
+        Creates each principal role if it doesn't exist, then grants catalog roles
+        if not already granted. Requires bootstrap to run first.
+
+        Args:
+            name: Unique name for the Pulumi resource.
+            roles: List of role configurations with catalog grants.
+            opts: Optional Pulumi resource options.
+
+        Returns:
+            The Kubernetes Job resource that manages roles.
+
+        Example:
+            ```python
+            polaris = Polaris('my-polaris', PolarisArgs(namespace='data'))
+            bootstrap = polaris.create_bootstrap('polaris-bootstrap')
+
+            polaris.create_roles('roles', [
+                RoleArgs(
+                    name='data_engineer',
+                    catalog_grants=[
+                        CatalogGrantArgs(catalog='bronze', role='catalog_admin'),
+                        CatalogGrantArgs(catalog='silver', role='catalog_admin'),
+                        CatalogGrantArgs(catalog='gold', role='catalog_admin'),
+                    ],
+                ),
+            ], opts=pulumi.ResourceOptions(depends_on=[bootstrap]))
+            ```
+        '''
+        args = self._args
+        script_template = (CONFIG_DIR / 'scripts/manage_roles.sh').read_text()
+
+        def make_calls(roles: List['RoleArgs']) -> str:
+            '''Build shell commands for creating roles and granting catalog access.'''
+            lines = []
+            for r in roles:
+                lines.append(f"create_role '{r.name}'")
+                for grant in r.catalog_grants:
+                    lines.append(f"grant_catalog_role '{r.name}' '{grant.catalog}' '{grant.role}'")
+            return '\n'.join(lines)
+
+        def build_script(secret: str) -> str:
+            '''Replace template placeholders with resolved values.'''
+            return (
+                script_template
+                .replace('{{POLARIS_URL}}', self._polaris_url)
+                .replace('{{CLIENT_ID}}', self._root_client_id)
+                .replace('{{CLIENT_SECRET}}', secret)
+                .replace('{{ROLE_CALLS}}', make_calls(roles))
+            )
+
+        script = pulumi.Output.from_input(self._root_client_secret).apply(build_script)
+
+        # Load job spec and inject script
+        spec = json.loads((CONFIG_DIR / 'jobs/role_job_spec.json').read_text())
+        spec['template']['spec']['containers'][0]['args'] = [script]
+
+        job_opts = pulumi.ResourceOptions(parent=self, depends_on=[self.chart])
+        if opts:
+            job_opts = pulumi.ResourceOptions.merge(job_opts, opts)
+
+        return Job(
+            f'{name}-role-job',
+            metadata={'namespace': args.namespace, 'labels': {'app': 'polaris-roles'}},
             spec=spec,
             opts=job_opts,
         )

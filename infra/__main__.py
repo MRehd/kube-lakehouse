@@ -28,7 +28,7 @@ from pulumi_kubernetes.core.v1 import Namespace
 from pulumi_kubernetes.helm.v3 import Chart, ChartOpts, FetchOpts
 
 from minio import BucketArgs, Minio, MinioArgs
-from polaris import CatalogArgs, Polaris, PolarisArgs, PrincipalArgs
+from polaris import CatalogArgs, CatalogGrantArgs, Polaris, PolarisArgs, PrincipalArgs, RoleArgs
 from psql import DatabaseArgs, GrantArgs, Psql, PsqlArgs, UserArgs
 from secrets import LakehouseSecrets, SecretArgs
 
@@ -307,19 +307,35 @@ polaris.create_catalogs(
     opts=pulumi.ResourceOptions(depends_on=[polaris_bootstrap]),
 )
 
+# Create RBAC roles for data access
+# The 'data_engineer' role grants full access to create/modify schemas, tables, and data
+polaris_roles = polaris.create_roles(
+    f'roles-{project_name}-{env}',
+    [
+        RoleArgs(
+            name='data_engineer',
+            catalog_grants=[
+                CatalogGrantArgs(catalog='bronze', role='catalog_admin'),
+                CatalogGrantArgs(catalog='silver', role='catalog_admin'),
+                CatalogGrantArgs(catalog='gold', role='catalog_admin'),
+            ],
+        ),
+    ],
+    opts=pulumi.ResourceOptions(depends_on=[polaris_bootstrap]),
+)
+
 # Service principals for compute engines
-# Each principal needs permissions to create schemas, tables, and read/write data
-# The 'service_admin' role is a built-in Polaris role with full catalog access
+# Each principal is assigned the 'data_engineer' role for full catalog access
 polaris_principals = [
-    {'name': 'spark', 'roles': ['service_admin']},
-    {'name': 'trino', 'roles': ['service_admin']},
-    {'name': 'flink', 'roles': ['service_admin']},
+    {'name': 'spark', 'roles': ['data_engineer']},
+    {'name': 'trino', 'roles': ['data_engineer']},
+    {'name': 'flink', 'roles': ['data_engineer']},
 ]
 
 polaris.create_principals(
     f'principals-{project_name}-{env}',
     [PrincipalArgs(name=p['name'], roles=p['roles']) for p in polaris_principals],
-    opts=pulumi.ResourceOptions(depends_on=[polaris_bootstrap]),
+    opts=pulumi.ResourceOptions(depends_on=[polaris_roles]),
 )
 
 
