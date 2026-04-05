@@ -1,0 +1,3 @@
+-- Create database if not exists
+SELECT 'CREATE DATABASE {{NAME}} WITH ENCODING ''{{ENCODING}}'' LC_COLLATE ''{{LC_COLLATE}}'' LC_CTYPE ''{{LC_CTYPE}}'' TEMPLATE {{TEMPLATE}}{{OWNER_CLAUSE}}'
+WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = '{{NAME}}') \gexec

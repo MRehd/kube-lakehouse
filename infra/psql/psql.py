@@ -284,19 +284,19 @@ shared_buffers = {args.shared_buffers}
         if isinstance(databases, DatabaseArgs):
             databases = [databases]
 
-        # Build the psql commands for each database
-        commands = self._build_psql_commands(databases)
+        # Build the SQL script for each database
+        sql_script = self._build_psql_commands(databases)
 
         # Load job spec and configure
         spec = json.loads((CONFIG_DIR / 'jobs/psql_job_spec.json').read_text())
         container = spec['template']['spec']['containers'][0]
-        container['args'] = [commands]
         container['env'][0]['value'] = pulumi.Output.concat(
             self._release_name, '.', self._args.namespace,
             '.svc.', self._args.cluster_domain
         )
         container['env'][1]['value'] = str(self._args.port)
         container['env'][3]['valueFrom']['secretKeyRef']['name'] = self._args.existing_secret
+        container['env'][4]['value'] = sql_script
 
         job_opts = pulumi.ResourceOptions(parent=self, depends_on=[self.chart])
         if opts:
@@ -310,33 +310,32 @@ shared_buffers = {args.shared_buffers}
         )
 
     def _build_psql_commands(self, databases: List[DatabaseArgs]) -> str:
-        '''Build the shell commands to create and configure databases.'''
-        commands = [
-            'sleep 5',  # Wait for PostgreSQL to be ready
-        ]
+        '''Build SQL script by reading templates and replacing placeholders.'''
+        scripts_dir = CONFIG_DIR / 'scripts'
+        create_db_tpl = (scripts_dir / 'create_database.sql').read_text()
+        enable_ext_tpl = (scripts_dir / 'enable_extension.sql').read_text()
 
+        sql_parts = []
         for db in databases:
-            # Check if database exists, create if not
-            create_db_cmd = f"psql -tc \"SELECT 1 FROM pg_database WHERE datname = '{db.name}'\" | grep -q 1 || "
-            create_db_cmd += f"createdb --encoding={db.encoding} --lc-collate={db.lc_collate} "
-            create_db_cmd += f"--lc-ctype={db.lc_ctype} --template={db.template} "
-            
-            if db.owner:
-                create_db_cmd += f"--owner={db.owner} "
-            
-            create_db_cmd += db.name
+            # Use doubled single quotes for SQL escaping inside the template string
+            owner_clause = f" OWNER ''{db.owner}''" if db.owner else ''
+            sql = (create_db_tpl
+                   .replace('{{NAME}}', db.name)
+                   .replace('{{ENCODING}}', db.encoding)
+                   .replace('{{LC_COLLATE}}', db.lc_collate)
+                   .replace('{{LC_CTYPE}}', db.lc_ctype)
+                   .replace('{{TEMPLATE}}', db.template)
+                   .replace('{{OWNER_CLAUSE}}', owner_clause))
+            sql_parts.append(sql)
 
-            commands.append(create_db_cmd)
-            commands.append(f"echo 'Database {db.name} ready'")
-
-            # Enable extensions if specified
             if db.extensions:
                 for ext in db.extensions:
-                    commands.append(
-                        f"psql -d {db.name} -c 'CREATE EXTENSION IF NOT EXISTS \"{ext}\"'"
-                    )
+                    ext_sql = (enable_ext_tpl
+                               .replace('{{EXTENSION}}', ext))
+                    # Prepend database switch for extension
+                    sql_parts.append(f'\\c {db.name}\n{ext_sql}')
 
-        return ' && '.join(commands)
+        return '\n'.join(sql_parts)
 
     def create_users(
         self,
@@ -384,19 +383,19 @@ shared_buffers = {args.shared_buffers}
         if isinstance(users, UserArgs):
             users = [users]
 
-        # Build the psql commands for each user
-        commands = self._build_user_commands(users)
+        # Build the SQL script for each user
+        sql_script = self._build_user_commands(users)
 
         # Load job spec and configure
         spec = json.loads((CONFIG_DIR / 'jobs/psql_job_spec.json').read_text())
         container = spec['template']['spec']['containers'][0]
-        container['args'] = [commands]
         container['env'][0]['value'] = pulumi.Output.concat(
             self._release_name, '.', self._args.namespace,
             '.svc.', self._args.cluster_domain
         )
         container['env'][1]['value'] = str(self._args.port)
         container['env'][3]['valueFrom']['secretKeyRef']['name'] = self._args.existing_secret
+        container['env'][4]['value'] = sql_script
 
         job_opts = pulumi.ResourceOptions(parent=self, depends_on=[self.chart])
         if opts:
@@ -410,12 +409,13 @@ shared_buffers = {args.shared_buffers}
         )
 
     def _build_user_commands(self, users: List[UserArgs]) -> pulumi.Output[str]:
-        '''
-        Build the shell commands to create and configure users.
-        
-        Handles Pulumi Outputs in user arguments (e.g., passwords from secrets).
-        '''
-        # Resolve each user's password (which may be a Pulumi Output) 
+        '''Build SQL script by reading templates and replacing placeholders.'''
+        scripts_dir = CONFIG_DIR / 'scripts'
+        create_user_tpl = (scripts_dir / 'create_user.sql').read_text()
+        grant_connect_tpl = (scripts_dir / 'grant_connect.sql').read_text()
+        grant_all_tpl = (scripts_dir / 'grant_privileges.sql').read_text()
+        grant_table_tpl = (scripts_dir / 'grant_table.sql').read_text()
+
         def resolve_user(user: UserArgs) -> pulumi.Output[dict]:
             return pulumi.Output.from_input(user.password).apply(lambda pw: {
                 'name': user.name,
@@ -428,73 +428,58 @@ shared_buffers = {args.shared_buffers}
                 'valid_until': user.valid_until,
                 'grants': user.grants,
             })
-        
+
         resolved_user_outputs = [resolve_user(u) for u in users]
-        
+
         def build_script(resolved_users: List[dict]) -> str:
-            commands = [
-                'sleep 5',  # Wait for PostgreSQL to be ready
-            ]
+            sql_parts = []
 
             for user in resolved_users:
-                # Build CREATE ROLE options
+                # Build options string
                 options = []
                 options.append('SUPERUSER' if user['superuser'] else 'NOSUPERUSER')
                 options.append('CREATEDB' if user['createdb'] else 'NOCREATEDB')
                 options.append('CREATEROLE' if user['createrole'] else 'NOCREATEROLE')
                 options.append('LOGIN' if user['login'] else 'NOLOGIN')
-                # Escape single quotes in password for SQL
                 escaped_pw = user['password'].replace("'", "''")
                 options.append(f"PASSWORD '{escaped_pw}'")
-                
                 if user['connection_limit'] != -1:
                     options.append(f"CONNECTION LIMIT {user['connection_limit']}")
-                
                 if user['valid_until']:
                     options.append(f"VALID UNTIL '{user['valid_until']}'")
 
-                options_str = ' '.join(options)
+                sql = (create_user_tpl
+                       .replace('{{NAME}}', user['name'])
+                       .replace('{{OPTIONS}}', ' '.join(options)))
+                sql_parts.append(sql)
 
-                # Create or alter user (idempotent)
-                create_user_cmd = f"psql -tc \"SELECT 1 FROM pg_roles WHERE rolname = '{user['name']}'\" | grep -q 1"
-                create_user_cmd += f" && psql -c \"ALTER USER {user['name']} WITH {options_str}\""
-                create_user_cmd += f" || psql -c \"CREATE USER {user['name']} WITH {options_str}\""
-                
-                commands.append(create_user_cmd)
-                commands.append(f"echo 'User {user['name']} ready'")
-
-                # Process grants if specified
                 if user['grants']:
                     for grant in user['grants']:
                         privileges = ', '.join(grant.privileges)
-                        grant_option = ' WITH GRANT OPTION' if grant.grant_option else ''
-                        
-                        # Grant connect on database
-                        commands.append(
-                            f"psql -c \"GRANT CONNECT ON DATABASE {grant.database} TO {user['name']}\""
-                        )
-                        
-                        # Grant privileges on each schema
-                        for schema in grant.schemas:
-                            # Grant usage on schema
-                            commands.append(
-                                f"psql -d {grant.database} -c \"GRANT USAGE ON SCHEMA {schema} TO {user['name']}\""
-                            )
-                            
-                            # Grant privileges on tables
-                            if grant.tables == 'ALL TABLES':
-                                commands.append(
-                                    f"psql -d {grant.database} -c \"GRANT {privileges} ON ALL TABLES IN SCHEMA {schema} TO {user['name']}{grant_option}\""
-                                )
-                                # Also grant on future tables
-                                commands.append(
-                                    f"psql -d {grant.database} -c \"ALTER DEFAULT PRIVILEGES IN SCHEMA {schema} GRANT {privileges} ON TABLES TO {user['name']}{grant_option}\""
-                                )
-                            else:
-                                commands.append(
-                                    f"psql -d {grant.database} -c \"GRANT {privileges} ON TABLE {schema}.{grant.tables} TO {user['name']}{grant_option}\""
-                                )
+                        grant_opt = ' WITH GRANT OPTION' if grant.grant_option else ''
 
-            return ' && '.join(commands)
-        
+                        connect_sql = (grant_connect_tpl
+                                       .replace('{{DATABASE}}', grant.database)
+                                       .replace('{{USERNAME}}', user['name']))
+                        sql_parts.append(connect_sql)
+
+                        for schema in grant.schemas:
+                            if grant.tables == 'ALL TABLES':
+                                privs_sql = (grant_all_tpl
+                                             .replace('{{SCHEMA}}', schema)
+                                             .replace('{{USERNAME}}', user['name'])
+                                             .replace('{{PRIVILEGES}}', privileges)
+                                             .replace('{{GRANT_OPTION}}', grant_opt))
+                            else:
+                                privs_sql = (grant_table_tpl
+                                             .replace('{{SCHEMA}}', schema)
+                                             .replace('{{TABLE}}', grant.tables)
+                                             .replace('{{USERNAME}}', user['name'])
+                                             .replace('{{PRIVILEGES}}', privileges)
+                                             .replace('{{GRANT_OPTION}}', grant_opt))
+                            # Prepend database switch for schema grants
+                            sql_parts.append(f'\\c {grant.database}\n{privs_sql}')
+
+            return '\n'.join(sql_parts)
+
         return pulumi.Output.all(*resolved_user_outputs).apply(build_script)
