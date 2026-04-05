@@ -1,0 +1,16 @@
+{
+  "ttlSecondsAfterFinished": 300,
+  "backoffLimit": 3,
+  "template": {
+    "spec": {
+      "restartPolicy": "OnFailure",
+      "containers": [
+        {
+          "name": "create-catalogs",
+          "image": "curlimages/curl:latest",
+          "command": ["/bin/sh", "-c"]
+        }
+      ]
+    }
+  }
+}

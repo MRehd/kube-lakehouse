@@ -2,12 +2,16 @@
 
 import json
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import List, Optional
 
 import pulumi
 from pulumi_kubernetes.batch.v1 import Job
 from pulumi_kubernetes.helm.v3 import Chart, ChartOpts, FetchOpts
 from pulumi_kubernetes.networking.v1 import Ingress
+
+# Config directory for templates
+CONFIG_DIR = Path(__file__).parent.parent / 'config'
 
 
 @dataclass
@@ -485,52 +489,40 @@ rc=$?; [ $rc -eq 0 ] || [ $rc -eq 3 ] && exit 0 || exit $rc
     ) -> Job:
         '''Create catalogs in Polaris via REST API. Requires bootstrap to run first.'''
         args = self._args
+        script_template = (CONFIG_DIR / 'create_catalogs.sh').read_text()
 
-        # Collect all potential Output values in a dict with named keys
+        def make_call(c, r):
+            '''Build a single create_catalog shell command.'''
+            base = c.default_base_location or f's3://{c.s3_bucket}/'
+            return (
+                f"create_catalog '{c.name}' '{c.s3_bucket}' "
+                f"'{r[f'{c.name}_endpoint']}' '{r[f'{c.name}_access_key']}' "
+                f"'{r[f'{c.name}_secret_key']}' '{c.s3_region}' "
+                f"'{str(c.s3_path_style_access).lower()}' '{base}'"
+            )
+
+        def build_script(r):
+            '''Replace template placeholders with resolved values.'''
+            return (
+                script_template
+                .replace('{{POLARIS_URL}}', self._polaris_url)
+                .replace('{{CLIENT_ID}}', self._root_client_id)
+                .replace('{{CLIENT_SECRET}}', r['secret'])
+                .replace('{{CATALOG_CALLS}}', '\n'.join(make_call(c, r) for c in catalogs))
+            )
+        
+        # Gather all Output values that need resolution
         inputs = {'secret': self._root_client_secret}
-        for cat in catalogs:
-            inputs[f'{cat.name}_access_key'] = cat.s3_access_key
-            inputs[f'{cat.name}_secret_key'] = cat.s3_secret_key
-            inputs[f'{cat.name}_endpoint'] = cat.s3_endpoint
-
-        def build_script(resolved):
-            secret = resolved['secret']
-            catalog_cmds = []
-            for cat in catalogs:
-                access_key = resolved[f'{cat.name}_access_key']
-                secret_key = resolved[f'{cat.name}_secret_key']
-                endpoint = resolved[f'{cat.name}_endpoint']
-                base_loc = cat.default_base_location or f's3://{cat.s3_bucket}/'
-                payload = {
-                    'name': cat.name, 'type': cat.catalog_type,
-                    'properties': {'default-base-location': base_loc},
-                    'storageConfigInfo': {
-                        'storageType': 'S3',
-                        'allowedLocations': [f's3://{cat.s3_bucket}/'],
-                        's3.endpoint': endpoint, 's3.access-key-id': access_key,
-                        's3.secret-access-key': secret_key, 's3.region': cat.s3_region,
-                        's3.path-style-access': str(cat.s3_path_style_access).lower(),
-                    },
-                }
-                catalog_cmds.append(
-                    f"curl -sf -X POST '{self._polaris_url}/api/management/v1/catalogs' "
-                    f"-H 'Authorization: Bearer '$TOKEN -H 'Content-Type: application/json' "
-                    f"-d '{json.dumps(payload)}' || echo 'Catalog {cat.name} may already exist'"
-                )
-            return f'''
-for i in $(seq 1 30); do
-  TOKEN=$(curl -sf -X POST '{self._polaris_url}/api/catalog/v1/oauth/tokens' \
-    -d 'grant_type=client_credentials&client_id={self._root_client_id}&client_secret={secret}&scope=PRINCIPAL_ROLE:ALL' \
-    | sed 's/.*"access_token":"\\([^"]*\\)".*/\\1/')
-  [ -n "$TOKEN" ] && break
-  sleep 2
-done
-[ -z "$TOKEN" ] && echo "Failed to get token" && exit 1
-{chr(10).join(catalog_cmds)}
-echo "Done"
-'''
+        for c in catalogs:
+            inputs[f'{c.name}_endpoint'] = c.s3_endpoint
+            inputs[f'{c.name}_access_key'] = c.s3_access_key
+            inputs[f'{c.name}_secret_key'] = c.s3_secret_key
 
         script = pulumi.Output.all(**inputs).apply(build_script)
+
+        # Load job spec and inject script
+        spec = json.loads((CONFIG_DIR / 'catalog_job_spec.json').read_text())
+        spec['template']['spec']['containers'][0]['args'] = [script]
 
         job_opts = pulumi.ResourceOptions(parent=self, depends_on=[self.chart])
         if opts:
@@ -539,20 +531,6 @@ echo "Done"
         return Job(
             f'{name}-catalog-job',
             metadata={'namespace': args.namespace, 'labels': {'app': 'polaris-catalogs'}},
-            spec={
-                'ttlSecondsAfterFinished': 300,
-                'backoffLimit': 3,
-                'template': {
-                    'spec': {
-                        'restartPolicy': 'OnFailure',
-                        'containers': [{
-                            'name': 'create-catalogs',
-                            'image': 'curlimages/curl:latest',
-                            'command': ['/bin/sh', '-c'],
-                            'args': [script],
-                        }],
-                    },
-                },
-            },
+            spec=spec,
             opts=job_opts,
         )
