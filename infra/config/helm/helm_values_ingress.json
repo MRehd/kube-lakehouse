@@ -1,0 +1,22 @@
+{
+  "ingressClassName": "{{INGRESS_CLASS_NAME}}",
+  "rules": [
+    {
+      "host": "{{HOST}}",
+      "http": {
+        "paths": [
+          {
+            "path": "/",
+            "pathType": "Prefix",
+            "backend": {
+              "service": {
+                "name": "{{SERVICE_NAME}}",
+                "port": {"number": 8181}
+              }
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "ttlSecondsAfterFinished": 300,
+  "backoffLimit": 3,
+  "template": {
+    "spec": {
+      "restartPolicy": "Never",
+      "containers": [
+        {
+          "name": "polaris-bootstrap",
+          "image": "apache/polaris-admin-tool:latest",
+          "command": ["/bin/sh", "-c"],
+          "env": [
+            {"name": "POLARIS_PERSISTENCE_TYPE", "value": "relational-jdbc"},
+            {"name": "QUARKUS_DATASOURCE_USERNAME", "valueFrom": {"secretKeyRef": {"name": "", "key": ""}}},
+            {"name": "QUARKUS_DATASOURCE_PASSWORD", "valueFrom": {"secretKeyRef": {"name": "", "key": ""}}},
+            {"name": "QUARKUS_DATASOURCE_JDBC_URL", "valueFrom": {"secretKeyRef": {"name": "", "key": ""}}}
+          ]
+        }
+      ]
+    }
+  }
+}

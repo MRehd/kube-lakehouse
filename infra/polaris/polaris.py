@@ -246,82 +246,44 @@ class Polaris(pulumi.ComponentResource):
         if args.ingress_annotations:
             annotations.update(args.ingress_annotations)
 
+        spec = json.loads((CONFIG_DIR / 'helm/helm_values_ingress.json').read_text())
+        spec['ingressClassName'] = args.ingress_class_name
+        spec['rules'][0]['host'] = self.api_host
+        spec['rules'][0]['http']['paths'][0]['backend']['service']['name'] = self._release_name
+        spec['rules'][0]['http']['paths'][0]['backend']['service']['port']['number'] = args.service_port
+
         return Ingress(
             f'{self._release_name}-ingress',
-            metadata={
-                'namespace': args.namespace,
-                'annotations': annotations,
-            },
-            spec={
-                'ingressClassName': args.ingress_class_name,
-                'rules': [
-                    {
-                        'host': self.api_host,
-                        'http': {
-                            'paths': [{
-                                'path': '/',
-                                'pathType': 'Prefix',
-                                'backend': {
-                                    'service': {
-                                        'name': self._release_name,
-                                        'port': {'number': args.service_port},
-                                    },
-                                },
-                            }],
-                        },
-                    },
-                ],
-            },
+            metadata={'namespace': args.namespace, 'annotations': annotations},
+            spec=spec,
             opts=pulumi.ResourceOptions(parent=self, depends_on=[self.chart]),
         )
 
     def _build_values(self, args: PolarisArgs) -> dict:
         '''Build Helm chart values from PolarisArgs.'''
-        values = {
-            'fullnameOverride': self._release_name,
-            'replicaCount': args.replica_count,
-            'image': {
-                'repository': args.image_repository,
-                'tag': args.image_tag,
-                'pullPolicy': args.image_pull_policy,
-            },
-            'service': {
-                'type': args.service_type,
-                'ports': [{
-                    'name': 'polaris-http',
-                    'port': args.service_port,
-                }],
-            },
-            'managementService': {
-                'ports': [{
-                    'name': 'polaris-mgmt',
-                    'port': args.management_port,
-                }],
-            },
-            'resources': args.resources,
-            'realmContext': {
-                'type': 'default',
-                'realms': args.realms,
-            },
-            'metrics': {
-                'enabled': args.metrics_enabled,
-            },
-            'logging': {
-                'level': args.logging_level,
-                'console': {
-                    'json': args.logging_console_json,
-                },
-            },
-            'autoscaling': {
-                'enabled': args.autoscaling_enabled,
-                'minReplicas': args.autoscaling_min_replicas,
-                'maxReplicas': args.autoscaling_max_replicas,
-            },
-        }
+        values = json.loads((CONFIG_DIR / 'helm/helm_values_polaris.json').read_text())
+
+        # Override with args
+        values['fullnameOverride'] = self._release_name
+        values['replicaCount'] = args.replica_count
+        values['image']['repository'] = args.image_repository
+        values['image']['tag'] = args.image_tag
+        values['image']['pullPolicy'] = args.image_pull_policy
+        values['service']['type'] = args.service_type
+        values['service']['ports'][0]['port'] = args.service_port
+        values['managementService']['ports'][0]['port'] = args.management_port
+        values['resources'] = args.resources
+        values['realmContext']['realms'] = args.realms
+        values['metrics']['enabled'] = args.metrics_enabled
+        values['logging']['level'] = args.logging_level
+        values['logging']['console']['json'] = args.logging_console_json
+        values['autoscaling']['enabled'] = args.autoscaling_enabled
+        values['autoscaling']['minReplicas'] = args.autoscaling_min_replicas
+        values['autoscaling']['maxReplicas'] = args.autoscaling_max_replicas
 
         # Configure persistence
         if args.persistence_type == 'relational-jdbc':
-            persistence_config = {
+            values['persistence'] = {
                 'type': 'relational-jdbc',
                 'relationalJdbc': {
                     'secret': {
@@ -332,7 +294,6 @@ class Polaris(pulumi.ComponentResource):
                     },
                 },
             }
-            values['persistence'] = persistence_config
         else:
             values['persistence'] = {'type': 'in-memory'}
 
@@ -400,84 +361,37 @@ class Polaris(pulumi.ComponentResource):
         # Build the bootstrap arguments
         realm = args.realms[0] if args.realms else 'POLARIS'
 
-        # Create credential argument by resolving the secret
-        credential_arg = pulumi.Output.from_input(root_client_secret).apply(
-            lambda secret: f'{realm},{root_client_id},{secret}'
+        # Load bootstrap script template
+        script_template = (CONFIG_DIR / 'scripts/bootstrap.sh').read_text()
+
+        # Build bootstrap script with resolved credentials
+        bootstrap_script = pulumi.Output.from_input(root_client_secret).apply(
+            lambda secret: script_template
+            .replace('{{REALM}}', realm)
+            .replace('{{CREDENTIAL}}', f'{realm},{root_client_id},{secret}')
         )
 
-        job_opts = pulumi.ResourceOptions(
-            parent=self,
-            depends_on=[self.chart],
-        )
+        # Load job spec and configure
+        spec = json.loads((CONFIG_DIR / 'jobs/bootstrap_job_spec.json').read_text())
+        container = spec['template']['spec']['containers'][0]
+        container['image'] = f'apache/polaris-admin-tool:{args.image_tag}'
+        container['args'] = [bootstrap_script]
+        container['env'][0]['value'] = args.persistence_type
+        container['env'][1]['valueFrom']['secretKeyRef']['name'] = args.persistence_secret_name
+        container['env'][1]['valueFrom']['secretKeyRef']['key'] = args.persistence_secret_username_key
+        container['env'][2]['valueFrom']['secretKeyRef']['name'] = args.persistence_secret_name
+        container['env'][2]['valueFrom']['secretKeyRef']['key'] = args.persistence_secret_password_key
+        container['env'][3]['valueFrom']['secretKeyRef']['name'] = args.persistence_secret_name
+        container['env'][3]['valueFrom']['secretKeyRef']['key'] = args.persistence_secret_jdbc_url_key
+
+        job_opts = pulumi.ResourceOptions(parent=self, depends_on=[self.chart])
         if opts:
             job_opts = pulumi.ResourceOptions.merge(job_opts, opts)
 
         return Job(
             f'{name}-bootstrap-job',
-            metadata={
-                'namespace': args.namespace,
-                'labels': {'app': 'polaris-bootstrap'},
-            },
-            spec={
-                # Auto-delete the Job 5 minutes after it completes
-                'ttlSecondsAfterFinished': 300,
-                # Retry up to 3 times if the Job fails
-                'backoffLimit': 3,
-                'template': {
-                    'spec': {
-                        'restartPolicy': 'Never',
-                        'containers': [
-                            {
-                                'name': 'polaris-bootstrap',
-                                'image': f'apache/polaris-admin-tool:{args.image_tag}',
-                                # Use Java directly; exit code 3 (already bootstrapped) treated as success
-                                'command': ['/bin/sh', '-c'],
-                                'args': [pulumi.Output.from_input(credential_arg).apply(
-                                    lambda cred: f'''
-java -jar /deployments/polaris-admin-tool.jar bootstrap -r {realm} -c "{cred}" -p
-rc=$?; [ $rc -eq 0 ] || [ $rc -eq 3 ] && exit 0 || exit $rc
-'''
-                                )],
-                                'env': [
-                                    # Persistence type
-                                    {
-                                        'name': 'POLARIS_PERSISTENCE_TYPE',
-                                        'value': args.persistence_type,
-                                    },
-                                    # Database credentials from secret
-                                    {
-                                        'name': 'QUARKUS_DATASOURCE_USERNAME',
-                                        'valueFrom': {
-                                            'secretKeyRef': {
-                                                'name': args.persistence_secret_name,
-                                                'key': args.persistence_secret_username_key,
-                                            },
-                                        },
-                                    },
-                                    {
-                                        'name': 'QUARKUS_DATASOURCE_PASSWORD',
-                                        'valueFrom': {
-                                            'secretKeyRef': {
-                                                'name': args.persistence_secret_name,
-                                                'key': args.persistence_secret_password_key,
-                                            },
-                                        },
-                                    },
-                                    {
-                                        'name': 'QUARKUS_DATASOURCE_JDBC_URL',
-                                        'valueFrom': {
-                                            'secretKeyRef': {
-                                                'name': args.persistence_secret_name,
-                                                'key': args.persistence_secret_jdbc_url_key,
-                                            },
-                                        },
-                                    },
-                                ],
-                            },
-                        ],
-                    },
-                },
-            },
+            metadata={'namespace': args.namespace, 'labels': {'app': 'polaris-bootstrap'}},
+            spec=spec,
             opts=job_opts,
         )
 
@@ -489,7 +403,7 @@ rc=$?; [ $rc -eq 0 ] || [ $rc -eq 3 ] && exit 0 || exit $rc
     ) -> Job:
         '''Create catalogs in Polaris via REST API. Requires bootstrap to run first.'''
         args = self._args
-        script_template = (CONFIG_DIR / 'create_catalogs.sh').read_text()
+        script_template = (CONFIG_DIR / 'scripts/create_catalogs.sh').read_text()
 
         def make_call(c, r):
             '''Build a single create_catalog shell command.'''
@@ -521,7 +435,7 @@ rc=$?; [ $rc -eq 0 ] || [ $rc -eq 3 ] && exit 0 || exit $rc
         script = pulumi.Output.all(**inputs).apply(build_script)
 
         # Load job spec and inject script
-        spec = json.loads((CONFIG_DIR / 'catalog_job_spec.json').read_text())
+        spec = json.loads((CONFIG_DIR / 'jobs/catalog_job_spec.json').read_text())
         spec['template']['spec']['containers'][0]['args'] = [script]
 
         job_opts = pulumi.ResourceOptions(parent=self, depends_on=[self.chart])
