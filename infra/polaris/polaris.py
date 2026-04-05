@@ -485,20 +485,21 @@ rc=$?; [ $rc -eq 0 ] || [ $rc -eq 3 ] && exit 0 || exit $rc
     ) -> Job:
         '''Create catalogs in Polaris via REST API. Requires bootstrap to run first.'''
         args = self._args
-        realm = args.realms[0] if args.realms else 'POLARIS'
 
-        # Collect all potential Output values from catalogs
-        all_inputs = [self._root_client_secret]
+        # Collect all potential Output values in a dict with named keys
+        inputs = {'secret': self._root_client_secret}
         for cat in catalogs:
-            all_inputs.extend([cat.s3_access_key, cat.s3_secret_key, cat.s3_endpoint])
+            inputs[f'{cat.name}_access_key'] = cat.s3_access_key
+            inputs[f'{cat.name}_secret_key'] = cat.s3_secret_key
+            inputs[f'{cat.name}_endpoint'] = cat.s3_endpoint
 
         def build_script(resolved):
-            secret = resolved[0]
-            idx = 1
+            secret = resolved['secret']
             catalog_cmds = []
             for cat in catalogs:
-                access_key, secret_key, endpoint = resolved[idx], resolved[idx+1], resolved[idx+2]
-                idx += 3
+                access_key = resolved[f'{cat.name}_access_key']
+                secret_key = resolved[f'{cat.name}_secret_key']
+                endpoint = resolved[f'{cat.name}_endpoint']
                 base_loc = cat.default_base_location or f's3://{cat.s3_bucket}/'
                 payload = {
                     'name': cat.name, 'type': cat.catalog_type,
@@ -529,7 +530,7 @@ done
 echo "Done"
 '''
 
-        script = pulumi.Output.all(*all_inputs).apply(build_script)
+        script = pulumi.Output.all(**inputs).apply(build_script)
 
         job_opts = pulumi.ResourceOptions(parent=self, depends_on=[self.chart])
         if opts:
