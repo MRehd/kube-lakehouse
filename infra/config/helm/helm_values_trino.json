@@ -46,6 +46,9 @@
     "hosts": [],
     "tls": []
   },
+  "additionalConfigProperties": [
+    "http-server.process-forwarded=ACCEPT"
+  ],
   "envFrom": [],
   "catalogs": {}
 }

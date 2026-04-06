@@ -254,6 +254,20 @@ class Kafka(pulumi.ComponentResource):
                     topic_config['config']['retention.bytes'] = topic.retention_bytes
                 values['provisioning']['topics'].append(topic_config)
 
+        def ignore_kraft_changes(args: pulumi.ResourceTransformArgs) -> pulumi.ResourceTransformResult:
+            # The KRaft secret data and its checksum annotation in the StatefulSet pod
+            # template are regenerated randomly on every chart render. Ignoring them
+            # prevents spurious updates and avoids replacing the secret (which would
+            # break existing Kafka storage).
+            if args.type_ == 'kubernetes:core/v1:Secret' and 'kraft' in (args.name or ''):
+                args.opts.ignore_changes = ['data']
+            if args.type_ == 'kubernetes:apps/v1:StatefulSet' and 'controller' in (args.name or ''):
+                args.opts.ignore_changes = [
+                    'spec.template.metadata.annotations',
+                    'spec.volumeClaimTemplates',
+                ]
+            return pulumi.ResourceTransformResult(props=args.props, opts=args.opts)
+
         return Chart(
             f'{self._name}-kafka',
             ChartOpts(
@@ -262,5 +276,8 @@ class Kafka(pulumi.ComponentResource):
                 namespace=self._namespace,
                 values=values,
             ),
-            opts=pulumi.ResourceOptions(parent=self),
+            opts=pulumi.ResourceOptions(
+                parent=self,
+                transforms=[ignore_kraft_changes],
+            ),
         )
