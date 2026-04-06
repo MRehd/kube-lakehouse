@@ -46,7 +46,7 @@ C:\Windows\System32\drivers\etc\hosts
 127.0.0.1 minio.k8lh.local
 127.0.0.1 minio-console.k8lh.local
 127.0.0.1 polaris.k8lh.local
-127.0.0.1 kafka-ui-k8lh-dev
+127.0.0.1 kafka-ui.k8lh.local
 
 # Pulumi commands from
 cd infra
