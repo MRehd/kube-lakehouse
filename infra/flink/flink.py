@@ -177,6 +177,11 @@ class Flink(pulumi.ComponentResource):
 
         values = self._build_values(args)
 
+        def ignore_crd_changes(t: pulumi.ResourceTransformArgs) -> pulumi.ResourceTransformResult:
+            if t.type_ == 'kubernetes:apiextensions.k8s.io/v1:CustomResourceDefinition':
+                t.opts.ignore_changes = ['spec']
+            return pulumi.ResourceTransformResult(props=t.props, opts=t.opts)
+
         self.chart = Chart(
             f'{name}-chart',
             ChartOpts(
@@ -188,7 +193,7 @@ class Flink(pulumi.ComponentResource):
                 ),
                 values=values,
             ),
-            opts=pulumi.ResourceOptions(parent=self),
+            opts=pulumi.ResourceOptions(parent=self, transforms=[ignore_crd_changes]),
         )
 
         self.namespace = self._namespace
