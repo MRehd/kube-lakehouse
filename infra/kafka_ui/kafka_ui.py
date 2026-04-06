@@ -3,7 +3,7 @@
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional, TypeVar
+from typing import Optional
 
 import pulumi
 from pulumi import Input, Output
@@ -81,17 +81,6 @@ class KafkaUi(pulumi.ComponentResource):
         ```
     '''
 
-    T = TypeVar('T')
-
-    @staticmethod
-    def resolve(value: Input[T]) -> Output[T]:
-        '''Convert an Input[T] to Output[T] without modification.
-
-        Use this to normalize values that may be plain types or Outputs
-        so you can use .apply() on them consistently.
-        '''
-        return Output.from_input(value)
-
     def __init__(
         self,
         name: str,
@@ -106,8 +95,8 @@ class KafkaUi(pulumi.ComponentResource):
         self._release_name = args.release_name or name
 
         # Resolve Input fields upfront
-        self._namespace = self.resolve(args.namespace)
-        self._bootstrap_servers = self.resolve(args.bootstrap_servers)
+        self._namespace = Output.from_input(args.namespace)
+        self._bootstrap_servers = Output.from_input(args.bootstrap_servers)
 
         # bootstrap_servers may be a pulumi.Output, so values are built inside apply()
         values = self._bootstrap_servers.apply(
@@ -135,7 +124,7 @@ class KafkaUi(pulumi.ComponentResource):
         )
 
         if args.ingress_enabled and args.ingress_domain:
-            self.ui_url = self.resolve(f'http://kafka-ui.{args.ingress_domain}')
+            self.ui_url = Output.from_input(f'http://kafka-ui.{args.ingress_domain}')
         else:
             self.ui_url = self.endpoint
 

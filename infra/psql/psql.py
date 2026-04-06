@@ -3,7 +3,7 @@
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Optional, TypeVar, Union
+from typing import List, Optional
 
 import pulumi
 from pulumi import Input, Output
@@ -164,17 +164,6 @@ class Psql(pulumi.ComponentResource):
         ```
     '''
 
-    T = TypeVar('T')
-
-    @staticmethod
-    def resolve(value: Input[T]) -> Output[T]:
-        '''Convert an Input[T] to Output[T] without modification.
-        
-        Use this to normalize values that may be plain types or Outputs
-        so you can use .apply() on them consistently.
-        '''
-        return Output.from_input(value)
-
     def __init__(
         self,
         name: str,
@@ -190,7 +179,7 @@ class Psql(pulumi.ComponentResource):
         self._release_name = args.release_name or name
 
         # Resolve Input fields upfront
-        self._namespace = self.resolve(args.namespace)
+        self._namespace = Output.from_input(args.namespace)
 
         # Build Helm values from args
         values = self._build_values(args)
@@ -219,7 +208,7 @@ class Psql(pulumi.ComponentResource):
         self.endpoint = pulumi.Output.concat(
             self.host, ':', str(args.port)
         )
-        self.secret_name = self.resolve(args.existing_secret)
+        self.secret_name = Output.from_input(args.existing_secret)
 
         self.register_outputs({
             'namespace': self.namespace,
@@ -432,16 +421,16 @@ shared_buffers = {args.shared_buffers}
         grant_table_tpl = (scripts_dir / 'grant_table.sql').read_text()
 
         def resolve_user(user: UserArgs) -> pulumi.Output[dict]:
-            return self.resolve(user.password).apply(lambda pw: {
-                'name': user.name,
-                'password': pw,
-                'superuser': user.superuser,
-                'createdb': user.createdb,
-                'createrole': user.createrole,
-                'login': user.login,
-                'connection_limit': user.connection_limit,
-                'valid_until': user.valid_until,
-                'grants': user.grants,
+            return Output.from_input(user).apply(lambda u: {
+                'name': u.name,
+                'password': u.password,
+                'superuser': u.superuser,
+                'createdb': u.createdb,
+                'createrole': u.createrole,
+                'login': u.login,
+                'connection_limit': u.connection_limit,
+                'valid_until': u.valid_until,
+                'grants': u.grants,
             })
 
         resolved_user_outputs = [resolve_user(u) for u in users]

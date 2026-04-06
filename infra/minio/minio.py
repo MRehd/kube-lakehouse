@@ -3,7 +3,7 @@
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Optional, TypeVar
+from typing import List, Optional
 
 import pulumi
 from pulumi import Input, Output
@@ -126,17 +126,6 @@ class Minio(pulumi.ComponentResource):
         ```
     '''
 
-    T = TypeVar('T')
-
-    @staticmethod
-    def resolve(value: Input[T]) -> Output[T]:
-        '''Convert an Input[T] to Output[T] without modification.
-        
-        Use this to normalize values that may be plain types or Outputs
-        so you can use .apply() on them consistently.
-        '''
-        return Output.from_input(value)
-
     def __init__(
         self,
         name: str,
@@ -152,8 +141,8 @@ class Minio(pulumi.ComponentResource):
         self._release_name = args.release_name or name
 
         # Resolve Input fields upfront
-        self._namespace = self.resolve(args.namespace)
-        self._root_password = self.resolve(args.root_password or 'minioadmin')
+        self._namespace = Output.from_input(args.namespace)
+        self._root_password = Output.from_input(args.root_password or 'minioadmin')
 
         # Build Helm values from args
         values = self._build_values(args)
@@ -193,8 +182,8 @@ class Minio(pulumi.ComponentResource):
 
             self.ingress = self._create_ingress(args)
 
-            self.api_url = self.resolve(f'http://{self.api_host}')
-            self.console_url = self.resolve(f'http://{self.console_host}')
+            self.api_url = Output.from_input(f'http://{self.api_host}')
+            self.console_url = Output.from_input(f'http://{self.console_host}')
         else:
             self.api_url = self.endpoint
             self.console_url = self.console_endpoint

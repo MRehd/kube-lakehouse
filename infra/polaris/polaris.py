@@ -3,7 +3,7 @@
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Optional, TypeVar
+from typing import List, Optional
 
 import pulumi
 from pulumi import Input, Output
@@ -202,17 +202,6 @@ class Polaris(pulumi.ComponentResource):
         ```
     '''
 
-    T = TypeVar('T')
-
-    @staticmethod
-    def resolve(value: Input[T]) -> Output[T]:
-        '''Convert an Input[T] to Output[T] without modification.
-        
-        Use this to normalize values that may be plain types or Outputs
-        so you can use .apply() on them consistently.
-        '''
-        return Output.from_input(value)
-
     def __init__(
         self,
         name: str,
@@ -230,10 +219,10 @@ class Polaris(pulumi.ComponentResource):
         self._mgmt_url = f'http://{self._release_name}:{args.management_port}'
         # Bootstrap credentials (set by create_bootstrap, used by create_catalogs)
         self._root_client_id: str = 'root'
-        self._root_client_secret: Output[str] = self.resolve('root')
+        self._root_client_secret: Output[str] = Output.from_input('root')
 
         # Resolve Input fields upfront
-        self._namespace = self.resolve(args.namespace)
+        self._namespace = Output.from_input(args.namespace)
 
         # Build Helm values from args
         values = self._build_values(args)
@@ -272,7 +261,7 @@ class Polaris(pulumi.ComponentResource):
         if args.ingress_enabled and args.ingress_domain:
             self.api_host = f'polaris.{args.ingress_domain}'
             self.ingress = self._create_ingress(args)
-            self.api_url = self.resolve(f'http://{self.api_host}')
+            self.api_url = Output.from_input(f'http://{self.api_host}')
         else:
             self.api_url = self.endpoint
 
@@ -404,7 +393,7 @@ class Polaris(pulumi.ComponentResource):
 
         # Store credentials for use by create_catalogs
         self._root_client_id = root_client_id
-        self._root_client_secret = self.resolve(root_client_secret)
+        self._root_client_secret = Output.from_input(root_client_secret)
 
         # Build the bootstrap arguments
         realm = args.realms[0] if args.realms else 'POLARIS'
