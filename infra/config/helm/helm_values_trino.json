@@ -1,0 +1,51 @@
+{
+  "fullnameOverride": "",
+  "server": {
+    "workers": 2,
+    "node": {
+      "environment": "production"
+    },
+    "log": {
+      "trino": {
+        "level": "INFO"
+      }
+    },
+    "config": {
+      "path": "/etc/trino"
+    }
+  },
+  "coordinator": {
+    "jvm": {
+      "maxHeapSize": "1G"
+    },
+    "config": {
+      "nodeScheduler": {
+        "includeCoordinator": false
+      },
+      "query": {
+        "maxMemoryPerNode": "512MB"
+      }
+    },
+    "resources": {}
+  },
+  "worker": {
+    "jvm": {
+      "maxHeapSize": "1G"
+    },
+    "config": {
+      "query": {
+        "maxMemoryPerNode": "512MB"
+      }
+    },
+    "resources": {}
+  },
+  "ingress": {
+    "enabled": false,
+    "className": "",
+    "annotations": {},
+    "hosts": [],
+    "tls": []
+  },
+  "envFrom": [],
+  "catalogs": {}
+}

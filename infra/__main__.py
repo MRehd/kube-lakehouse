@@ -29,11 +29,13 @@ from pulumi_kubernetes.helm.v3 import Chart, ChartOpts, FetchOpts
 
 from kafka import AutoscalingArgs, Kafka, KafkaArgs, TopicArgs
 from kafka_ui import KafkaUi, KafkaUiArgs
-from keda import Keda, KedaArgs, KafkaTriggerArgs, ScaledObjectArgs
+from keda import Keda, KedaArgs, KafkaTrigger, ScaledObjectArgs, TriggerArgs
 from minio import BucketArgs, Minio, MinioArgs
 from polaris import CatalogArgs, CatalogGrantArgs, Polaris, PolarisArgs, PrincipalArgs, RoleArgs
 from psql import DatabaseArgs, GrantArgs, Psql, PsqlArgs, UserArgs
+from trino import Trino, TrinoArgs, TrinoAutoscalingArgs, TrinoIcebergCatalogArgs
 from secrets import LakehouseSecrets, SecretArgs
+from service_accounts import PolicyRuleArgs, ServiceAccountArgs, ServiceAccounts, ServiceAccountsArgs
 
 
 # =============================================================================
@@ -231,6 +233,28 @@ for spec in db_specs:
 
 
 # =============================================================================
+# SERVICE ACCOUNTS
+# =============================================================================
+
+sas = ServiceAccounts(
+    f'sas-{project_name}-{env}',
+    ServiceAccountsArgs(namespace=ns.metadata.name),
+    opts=pulumi.ResourceOptions(depends_on=[ns]),
+)
+
+# SA for the Polaris principal provisioning job — needs get/create on Secrets
+polaris_provisioner_sa = sas.provision(
+    f'polaris-provisioner-{project_name}-{env}',
+    ServiceAccountArgs(
+        name='polaris-principal-provisioner',
+        rules=[
+            PolicyRuleArgs(resources=['secrets'], verbs=['get', 'create']),
+        ],
+    ),
+)
+
+
+# =============================================================================
 # APACHE POLARIS - ICEBERG CATALOG
 # =============================================================================
 
@@ -329,16 +353,19 @@ polaris_roles = polaris.create_roles(
 
 # Service principals for compute engines
 # Each principal is assigned the 'data_engineer' role for full catalog access
-polaris_principals = [
-    {'name': 'spark', 'roles': ['data_engineer']},
-    {'name': 'trino', 'roles': ['data_engineer']},
-    {'name': 'flink', 'roles': ['data_engineer']},
-]
+trino_credentials_secret = 'polaris-trino-credentials'
+spark_credentials_secret = 'polaris-spark-credentials'
+flink_credentials_secret = 'polaris-flink-credentials'
 
-polaris.create_principals(
+polaris_principals = polaris.create_principals(
     f'principals-{project_name}-{env}',
-    [PrincipalArgs(name=p['name'], roles=p['roles']) for p in polaris_principals],
-    opts=pulumi.ResourceOptions(depends_on=[polaris_roles]),
+    [
+        PrincipalArgs(name='spark', credentials_secret_name=spark_credentials_secret, roles=['data_engineer']),
+        PrincipalArgs(name='flink', credentials_secret_name=flink_credentials_secret, roles=['data_engineer']),
+        PrincipalArgs(name='trino', credentials_secret_name=trino_credentials_secret, roles=['data_engineer']),
+    ],
+    provisioner_sa_name=polaris_provisioner_sa.metadata.name,
+    opts=pulumi.ResourceOptions(depends_on=[polaris_roles, polaris_provisioner_sa]),
 )
 
 
@@ -470,6 +497,85 @@ keda = Keda(
 
 
 # =============================================================================
+# TRINO - DISTRIBUTED SQL QUERY ENGINE
+# =============================================================================
+
+# Deploy Trino as the query layer over the Iceberg tables managed by Polaris.
+# Each medallion catalog is registered so Trino can query bronze/silver/gold layers.
+trino_name = f'trino-{project_name}-{env}'
+trino = Trino(
+    trino_name,
+    TrinoArgs(
+        namespace=ns.metadata.name,
+        release_name=trino_name,
+        workers=1,
+        coordinator_heap='1G',
+        worker_heap='1G',
+        autoscaling=TrinoAutoscalingArgs(
+            min_replicas=1,
+            max_replicas=5,
+            target_cpu_utilization=70,
+            target_memory_utilization=80,
+        ),
+        ingress_enabled=True,
+        ingress_domain=domain,
+        ingress_class_name='nginx',
+    ),
+    opts=pulumi.ResourceOptions(depends_on=[polaris_bootstrap, minio, polaris_principals]),
+)
+
+trino.create_catalogs(
+    f'catalogs-{project_name}-{env}',
+    [
+        TrinoIcebergCatalogArgs(
+            name='bronze',
+            polaris_endpoint=polaris.endpoint,
+            warehouse='bronze',
+            credentials_secret=trino_credentials_secret,
+            s3_endpoint=minio.endpoint,
+            s3_access_key=credentials['minio']['user'],
+            s3_secret_key=credentials['minio']['password'],
+        ),
+        TrinoIcebergCatalogArgs(
+            name='silver',
+            polaris_endpoint=polaris.endpoint,
+            warehouse='silver',
+            credentials_secret=trino_credentials_secret,
+            s3_endpoint=minio.endpoint,
+            s3_access_key=credentials['minio']['user'],
+            s3_secret_key=credentials['minio']['password'],
+        ),
+        TrinoIcebergCatalogArgs(
+            name='gold',
+            polaris_endpoint=polaris.endpoint,
+            warehouse='gold',
+            credentials_secret=trino_credentials_secret,
+            s3_endpoint=minio.endpoint,
+            s3_access_key=credentials['minio']['user'],
+            s3_secret_key=credentials['minio']['password'],
+        ),
+    ],
+)
+
+# KEDA ScaledObject: scale Trino workers based on CPU and memory utilization
+# keda.create_scaled_object(
+#     f'scaledobject-{project_name}-{env}-trino',
+#     ScaledObjectArgs(
+#         name='trino-worker-scaler',
+#         target_name=f'{trino_name}-worker',
+#         target_kind='Deployment',
+#         min_replica_count=1,
+#         max_replica_count=5,
+#         triggers=[
+#             TriggerArgs(type='cpu',    metadata={'type': 'Utilization', 'value': '70'}),
+#             TriggerArgs(type='memory', metadata={'type': 'Utilization', 'value': '80'}),
+#         ],
+#     ),
+#     opts=pulumi.ResourceOptions(depends_on=[trino])
+# )
+
+
+# =============================================================================
 # STACK EXPORTS
 # =============================================================================
 
@@ -492,6 +598,10 @@ pulumi.export('kafka_bootstrap_endpoint', kafka.bootstrap_endpoint)
 
 # Kafka UI
 pulumi.export('kafka_ui_url', kafka_ui.ui_url)
+
+# Trino
+pulumi.export('trino_endpoint', trino.endpoint)
+pulumi.export('trino_url', trino.ui_url)
 
 # KEDA
 pulumi.export('keda_namespace', keda.namespace)

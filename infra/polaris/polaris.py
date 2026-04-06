@@ -57,6 +57,13 @@ class PrincipalArgs:
     name: str
     '''Name of the principal to create.'''
 
+    credentials_secret_name: str
+    '''
+    Kubernetes Secret name where this principal's OAuth2 credentials will be stored.
+    The secret is created once at principal creation time and never overwritten.
+    The provisioning job pod must run under a ServiceAccount with get/create on Secrets.
+    '''
+
     roles: List[str] = field(default_factory=list)
     '''List of principal role names to assign to this principal.'''
 
@@ -439,7 +446,6 @@ class Polaris(pulumi.ComponentResource):
         opts: pulumi.ResourceOptions = None,
     ) -> Job:
         '''Create catalogs in Polaris via REST API. Requires bootstrap to run first.'''
-        args = self._args
         script_template = (CONFIG_DIR / 'scripts/create_catalogs.sh').read_text()
 
         def make_call(c, r):
@@ -490,6 +496,7 @@ class Polaris(pulumi.ComponentResource):
         self,
         name: str,
         principals: List['PrincipalArgs'],
+        provisioner_sa_name: Optional[Input[str]] = None,
         opts: pulumi.ResourceOptions = None,
     ) -> Job:
         '''
@@ -501,6 +508,10 @@ class Polaris(pulumi.ComponentResource):
         Args:
             name: Unique name for the Pulumi resource.
             principals: List of principal configurations with roles to assign.
+            provisioner_sa_name: Name of a Kubernetes ServiceAccount to run the job pod under.
+                Required when any principal has credentials_secret_name set — the SA must
+                have permission to get/create Secrets in the namespace. Use the
+                ServiceAccounts component to provision this SA before calling create_principals().
             opts: Optional Pulumi resource options.
 
         Returns:
@@ -508,29 +519,32 @@ class Polaris(pulumi.ComponentResource):
 
         Example:
             ```python
-            polaris = Polaris('my-polaris', PolarisArgs(namespace='data'))
-            bootstrap = polaris.create_bootstrap('polaris-bootstrap')
+            from service_accounts import ServiceAccounts, ServiceAccountsArgs, ServiceAccountArgs, PolicyRuleArgs
+
+            sas = ServiceAccounts('sas', ServiceAccountsArgs(namespace=ns.metadata.name))
+            provisioner_sa = sas.provision('polaris-provisioner', ServiceAccountArgs(
+                name='polaris-principal-provisioner',
+                rules=[PolicyRuleArgs(resources=['secrets'], verbs=['get', 'create'])],
+            ))
 
             polaris.create_principals('principals', [
-                PrincipalArgs(name='spark-service', roles=['catalog_admin']),
-                PrincipalArgs(name='trino-service', roles=['data_reader']),
-            ], opts=pulumi.ResourceOptions(depends_on=[bootstrap]))
+                PrincipalArgs(name='trino', roles=['data_engineer'],
+                              credentials_secret_name='polaris-trino-credentials'),
+            ], provisioner_sa_name='polaris-principal-provisioner',
+               opts=pulumi.ResourceOptions(depends_on=[bootstrap, provisioner_sa]))
             ```
         '''
-        args = self._args
         script_template = (CONFIG_DIR / 'scripts/manage_principals.sh').read_text()
 
         def make_calls(principals: List['PrincipalArgs']) -> str:
-            '''Build shell commands for creating principals and assigning roles.'''
             lines = []
             for p in principals:
-                lines.append(f"create_principal '{p.name}'")
+                lines.append(f"create_principal_with_secret '{p.name}' '{p.credentials_secret_name}'")
                 for role in p.roles:
                     lines.append(f"assign_role '{p.name}' '{role}'")
             return '\n'.join(lines)
 
         def build_script(secret: str) -> str:
-            '''Replace template placeholders with resolved values.'''
             return (
                 script_template
                 .replace('{{POLARIS_URL}}', self._polaris_url)
@@ -541,9 +555,10 @@ class Polaris(pulumi.ComponentResource):
 
         script = self._root_client_secret.apply(build_script)
 
-        # Load job spec and inject script
         spec = json.loads((CONFIG_DIR / 'jobs/principal_job_spec.json').read_text())
         spec['template']['spec']['containers'][0]['args'] = [script]
+        if provisioner_sa_name:
+            spec['template']['spec']['serviceAccountName'] = provisioner_sa_name
 
         job_opts = pulumi.ResourceOptions(parent=self, depends_on=[self.chart])
         if opts:
@@ -593,7 +608,6 @@ class Polaris(pulumi.ComponentResource):
             ], opts=pulumi.ResourceOptions(depends_on=[bootstrap]))
             ```
         '''
-        args = self._args
         script_template = (CONFIG_DIR / 'scripts/manage_roles.sh').read_text()
 
         def make_calls(roles: List['RoleArgs']) -> str:

@@ -3,7 +3,7 @@
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 import pulumi
 from pulumi import Input, Output
@@ -15,26 +15,59 @@ CONFIG_DIR = Path(__file__).parent.parent / 'config'
 
 
 @dataclass
-class KafkaTriggerArgs:
-    '''Configuration for a KEDA Kafka consumer-lag trigger.'''
+class TriggerArgs:
+    '''A generic KEDA trigger. Metadata values may be plain strings or Pulumi Outputs.'''
 
-    bootstrap_servers: Input[str]
-    '''Kafka bootstrap server address (e.g. kafka-svc:9092). Accepts a plain string or Pulumi Output.'''
+    type: str
+    '''KEDA trigger type (e.g. 'kafka', 'cpu', 'prometheus', 'redis').'''
 
-    consumer_group: str
-    '''Kafka consumer group ID to monitor for lag.'''
+    metadata: Dict[str, Input[str]]
+    '''Trigger metadata key-value pairs as defined by the KEDA scaler spec.'''
 
-    topic: str
-    '''Kafka topic to watch.'''
 
-    lag_threshold: int = 10
-    '''Number of messages behind before scaling up.'''
+def KafkaTrigger(
+    bootstrap_servers: Input[str],
+    consumer_group: str,
+    topic: str,
+    lag_threshold: int = 10,
+    offset_reset_policy: str = 'latest',
+    partition_limitation: Optional[int] = None,
+) -> TriggerArgs:
+    '''
+    Build a KEDA Kafka consumer-lag trigger.
 
-    offset_reset_policy: str = 'latest'
-    '''Offset reset policy: 'latest' or 'earliest'.'''
+    Args:
+        bootstrap_servers: Kafka bootstrap address. Accepts a plain string or Pulumi Output.
+        consumer_group: Kafka consumer group ID to monitor for lag.
+        topic: Kafka topic to watch.
+        lag_threshold: Number of messages behind before scaling up.
+        offset_reset_policy: 'latest' or 'earliest'.
+        partition_limitation: Limit scaling to N partitions. None means all partitions.
 
-    partition_limitation: Optional[int] = None
-    '''Limit scaling decisions to N partitions. None means all partitions.'''
+    Returns:
+        A TriggerArgs configured for the KEDA Kafka scaler.
+
+    Example:
+        ```python
+        KafkaTrigger(
+            bootstrap_servers=kafka.bootstrap_servers,
+            consumer_group='spark-group',
+            topic='events',
+            lag_threshold=10,
+        )
+        ```
+    '''
+    metadata: Dict[str, Input[str]] = {
+        'bootstrapServers': bootstrap_servers,
+        'consumerGroup': consumer_group,
+        'topic': topic,
+        'lagThreshold': str(lag_threshold),
+        'offsetResetPolicy': offset_reset_policy,
+    }
+    if partition_limitation is not None:
+        metadata['partitionLimitation'] = str(partition_limitation)
+
+    return TriggerArgs(type='kafka', metadata=metadata)
 
 
 @dataclass
@@ -47,8 +80,8 @@ class ScaledObjectArgs:
     target_name: str
     '''Name of the Deployment or StatefulSet to scale.'''
 
-    triggers: List[KafkaTriggerArgs]
-    '''One or more Kafka consumer-lag triggers that drive scaling.'''
+    triggers: List[TriggerArgs]
+    '''One or more triggers that drive scaling.'''
 
     target_kind: str = 'Deployment'
     '''Kind of the scale target: 'Deployment' or 'StatefulSet'.'''
@@ -97,6 +130,15 @@ class KedaArgs:
     })
     '''Resource requests and limits for KEDA operator and metrics server pods.'''
 
+    deploy_metrics_server: bool = True
+    '''Deploy the Kubernetes Metrics Server alongside KEDA. Required for cpu/memory triggers.'''
+
+    metrics_server_version: str = '3.12.2'
+    '''Version of the kubernetes-sigs/metrics-server Helm chart.'''
+
+    metrics_server_kubelet_insecure_tls: bool = True
+    '''Pass --kubelet-insecure-tls to the Metrics Server. Required for most local/dev clusters.'''
+
     extra_values: dict = field(default_factory=dict)
     '''Additional Helm values to pass to the chart.'''
 
@@ -107,34 +149,39 @@ class Keda(pulumi.ComponentResource):
 
     KEDA (Kubernetes Event-Driven Autoscaling) extends Kubernetes with event-driven
     scaling via custom ScaledObject resources. This component deploys the KEDA
-    operator and exposes a create_scaled_object() method for registering workload
-    scalers driven by Kafka consumer lag.
+    operator and exposes a create_scaled_object() method for wiring any KEDA-supported
+    trigger type to a workload.
 
     Example:
         ```python
-        from keda import Keda, KedaArgs, KafkaTriggerArgs, ScaledObjectArgs
+        from keda import Keda, KedaArgs, KafkaTrigger, ScaledObjectArgs, TriggerArgs
 
-        keda = Keda('my-keda', KedaArgs(
-            namespace='data',
-            operator_replicas=2,
-        ))
+        keda = Keda('my-keda', KedaArgs(namespace='data'))
 
+        # Kafka trigger (built-in factory)
         keda.create_scaled_object(
             'spark-scaler',
             ScaledObjectArgs(
                 name='spark-worker-scaler',
                 target_name='spark-worker',
-                target_kind='Deployment',
-                min_replica_count=1,
-                max_replica_count=10,
-                triggers=[
-                    KafkaTriggerArgs(
-                        bootstrap_servers=kafka.bootstrap_servers,
-                        consumer_group='spark-group',
-                        topic='events',
-                        lag_threshold=10,
-                    ),
-                ],
+                triggers=[KafkaTrigger(
+                    bootstrap_servers=kafka.bootstrap_servers,
+                    consumer_group='spark-group',
+                    topic='events',
+                )],
+            ),
+        )
+
+        # Any other KEDA trigger type via TriggerArgs directly
+        keda.create_scaled_object(
+            'cpu-scaler',
+            ScaledObjectArgs(
+                name='worker-cpu-scaler',
+                target_name='worker',
+                triggers=[TriggerArgs(
+                    type='cpu',
+                    metadata={'type': 'Utilization', 'value': '70'},
+                )],
             ),
         )
         ```
@@ -153,13 +200,10 @@ class Keda(pulumi.ComponentResource):
         self._name = name
         self._release_name = args.release_name or name
 
-        # Resolve Input fields upfront
         self._namespace = Output.from_input(args.namespace)
 
-        # Build Helm values from args
         values = self._build_values(args)
 
-        # Deploy KEDA operator via Helm
         self.chart = Chart(
             f'{name}-chart',
             ChartOpts(
@@ -175,6 +219,24 @@ class Keda(pulumi.ComponentResource):
         )
 
         self.namespace = self._namespace
+
+        if args.deploy_metrics_server:
+            ms_values = {}
+            if args.metrics_server_kubelet_insecure_tls:
+                ms_values['args'] = ['--kubelet-insecure-tls']
+            Chart(
+                f'{name}-metrics-server',
+                ChartOpts(
+                    chart='metrics-server',
+                    version=args.metrics_server_version,
+                    namespace=self._namespace,
+                    fetch_opts=FetchOpts(
+                        repo='https://kubernetes-sigs.github.io/metrics-server/',
+                    ),
+                    values=ms_values,
+                ),
+                opts=pulumi.ResourceOptions(parent=self),
+            )
 
         self.register_outputs({
             'namespace': self.namespace,
@@ -213,11 +275,10 @@ class Keda(pulumi.ComponentResource):
         opts: pulumi.ResourceOptions = None,
     ) -> CustomResource:
         '''
-        Create a KEDA ScaledObject that scales a workload based on Kafka consumer lag.
+        Create a KEDA ScaledObject for any supported trigger type.
 
-        The ScaledObject is a CRD (installed by the KEDA Helm chart). It watches
-        one or more Kafka consumer groups and adjusts the replica count of the
-        target Deployment or StatefulSet when lag crosses the threshold.
+        Metadata values in each TriggerArgs may be plain strings or Pulumi Outputs —
+        all are resolved transparently before the ScaledObject spec is built.
 
         Args:
             name: Unique Pulumi resource name.
@@ -226,49 +287,26 @@ class Keda(pulumi.ComponentResource):
 
         Returns:
             The created ScaledObject CustomResource.
-
-        Example:
-            ```python
-            keda.create_scaled_object(
-                'flink-scaler',
-                ScaledObjectArgs(
-                    name='flink-taskmanager-scaler',
-                    target_name='flink-taskmanager',
-                    target_kind='Deployment',
-                    min_replica_count=1,
-                    max_replica_count=8,
-                    triggers=[
-                        KafkaTriggerArgs(
-                            bootstrap_servers=kafka.bootstrap_servers,
-                            consumer_group='flink-group',
-                            topic='events',
-                            lag_threshold=20,
-                        ),
-                    ],
-                ),
-                opts=pulumi.ResourceOptions(depends_on=[kafka]),
-            )
-            ```
         '''
-        # Collect all bootstrap_servers Inputs — they may be pulumi.Output[str]
-        # (e.g. kafka.bootstrap_servers), so they must be resolved before building the spec.
-        bs_inputs = {f'bs_{i}': t.bootstrap_servers for i, t in enumerate(args.triggers)}
-        resolved = pulumi.Output.all(**bs_inputs)
+        # Collect every metadata Input[str] across all triggers, keyed uniquely.
+        # Plain strings are wrapped by Output.all transparently.
+        all_inputs = {
+            f't{i}_{key}': val
+            for i, trigger in enumerate(args.triggers)
+            for key, val in trigger.metadata.items()
+        }
 
-        def build_spec(r: dict) -> dict:
-            triggers = []
-            for i, trigger in enumerate(args.triggers):
-                metadata = {
-                    'bootstrapServers': r[f'bs_{i}'],
-                    'consumerGroup': trigger.consumer_group,
-                    'topic': trigger.topic,
-                    'lagThreshold': str(trigger.lag_threshold),
-                    'offsetResetPolicy': trigger.offset_reset_policy,
+        def build_spec(resolved: dict) -> dict:
+            triggers = [
+                {
+                    'type': trigger.type,
+                    'metadata': {
+                        key: resolved[f't{i}_{key}']
+                        for key in trigger.metadata
+                    },
                 }
-                if trigger.partition_limitation is not None:
-                    metadata['partitionLimitation'] = str(trigger.partition_limitation)
-                triggers.append({'type': 'kafka', 'metadata': metadata})
-
+                for i, trigger in enumerate(args.triggers)
+            ]
             return {
                 'scaleTargetRef': {
                     'apiVersion': args.target_api_version,
@@ -297,6 +335,6 @@ class Keda(pulumi.ComponentResource):
                 'name': args.name,
                 'namespace': self._namespace,
             },
-            spec=resolved.apply(build_spec),
+            spec=pulumi.Output.all(**all_inputs).apply(build_spec),
             opts=resource_opts,
         )
