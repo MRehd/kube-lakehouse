@@ -47,6 +47,10 @@ C:\Windows\System32\drivers\etc\hosts
 127.0.0.1 minio-console.k8lh.local
 127.0.0.1 polaris.k8lh.local
 127.0.0.1 kafka-ui.k8lh.local
+127.0.0.1 producer.k8lh.local
+
+# Start docker local registry
+docker run -d -p 5000:5000 --name registry registry:2
 
 # Pulumi commands from
 cd infra
@@ -76,6 +80,10 @@ pulumi config set --secret polaris_postgres_password "polaris"
 pulumi config set airflow_postgres_user "airflow"
 pulumi config set --secret airflow_postgres_password "airflow"
 
+pulumi config set docker_registry_username ""
+pulumi config set --secret docker_registry_password ""
+pulumi config set docker_producer_image_name "localhost:5000/producer"
+
 pulumi config get SECRET_NAME
 pulumi config --show-secrets
 
@@ -85,6 +93,7 @@ pulumi stack select dev
 pulumi preview
 or
 pulumi preview --stack dev
+pulumi preview --diff --stack dev
 
 # Deploy
 pulumi refresh

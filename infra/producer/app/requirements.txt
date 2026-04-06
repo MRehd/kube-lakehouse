@@ -1,0 +1,8 @@
+kafka-python
+requests
+aiokafka
+flask
+fastapi
+uvicorn
+gunicorn
+pydantic

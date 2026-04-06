@@ -14,3 +14,7 @@ config:
   k8lh:airflow_postgres_user: airflow
   k8lh:airflow_postgres_password:
     secure: v1:nvPUHe2C2Qsepl00:Yunz4vQNEwk3r8uguF2+Jtbckgey9MU=
+  k8lh:docker_registry_username: ''
+  k8lh:docker_registry_password:
+    secure: v1:pkbHlL3MnNpyPXiG:EeNRXqb2gSA1X1dLmJ3YeA==
+  k8lh:docker_producer_image_name: localhost:5000/producer

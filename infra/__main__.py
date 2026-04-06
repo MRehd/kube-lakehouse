@@ -35,6 +35,7 @@ from polaris import CatalogArgs, CatalogGrantArgs, Polaris, PolarisArgs, Princip
 from psql import DatabaseArgs, GrantArgs, Psql, PsqlArgs, UserArgs
 from trino import Trino, TrinoArgs, TrinoAutoscalingArgs, TrinoIcebergCatalogArgs
 from flink import Flink, FlinkArgs, FlinkIcebergCatalogArgs, FlinkJobArgs
+from producer import Producer, ProducerArgs
 from secrets import LakehouseSecrets, SecretArgs
 from service_accounts import PolicyRuleArgs, ServiceAccountArgs, ServiceAccounts, ServiceAccountsArgs
 
@@ -581,6 +582,26 @@ trino.create_catalogs(
 
 
 # =============================================================================
+# PRODUCER - KAFKA EVENT PRODUCER
+# =============================================================================
+
+producer_name = f'producer-{project_name}-{env}'
+producer = Producer(
+    producer_name,
+    ProducerArgs(
+        namespace=ns.metadata.name,
+        image_name=config.require('docker_producer_image_name'),
+        registry_username=config.require('docker_registry_username'),
+        registry_password=config.require_secret('docker_registry_password'),
+        ingress_enabled=True,
+        ingress_domain=domain,
+        ingress_class_name='nginx',
+    ),
+    opts=pulumi.ResourceOptions(depends_on=[ns, ingress_nginx, kafka]),
+)
+
+
+# =============================================================================
 # APACHE FLINK - STREAM PROCESSING
 # =============================================================================
 
@@ -661,6 +682,9 @@ pulumi.export('trino_url', trino.ui_url)
 
 # KEDA
 pulumi.export('keda_namespace', keda.namespace)
+
+# Producer
+pulumi.export('producer_url', producer.url)
 
 # Flink
 pulumi.export('flink_namespace', flink.namespace)
