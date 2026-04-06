@@ -499,6 +499,10 @@ keda = Keda(
 # =============================================================================
 # TRINO - DISTRIBUTED SQL QUERY ENGINE
 # =============================================================================
+# TODO: Add authentication. Currently deployed with no auth (anyone can log in
+#       with any username and no password). To enforce auth, set
+#       server.config.authenticationType=PASSWORD and configure a password file
+#       or LDAP via coordinator.additionalConfigFiles.
 
 # Deploy Trino as the query layer over the Iceberg tables managed by Polaris.
 # Each medallion catalog is registered so Trino can query bronze/silver/gold layers.
