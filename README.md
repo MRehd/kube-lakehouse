@@ -98,3 +98,5 @@ pulumi destroy --yes
 
 # Clear state
 pulumi stack rm dev --yes
+
+# Stack documentation and architecture

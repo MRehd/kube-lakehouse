@@ -1,0 +1,19 @@
+{
+  "fullnameOverride": "",
+  "replicas": 1,
+  "watchNamespaces": [],
+  "webhook": {
+    "create": false
+  },
+  "defaultConfiguration": {
+    "create": true,
+    "append": true,
+    "flink-conf.yaml": "kubernetes.operator.reconcile.interval: 15 s\nkubernetes.operator.observer.progress-check.interval: 5 s\n"
+  },
+  "operatorPod": {
+    "resources": {
+      "requests": {"cpu": "100m", "memory": "256Mi"},
+      "limits":   {"cpu": "500m", "memory": "512Mi"}
+    }
+  }
+}

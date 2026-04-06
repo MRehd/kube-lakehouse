@@ -1,0 +1,49 @@
+{
+  "flinkVersion": "v2_0",
+  "flinkConfiguration": {},
+  "image": "",
+  "imagePullPolicy": "IfNotPresent",
+  "serviceAccount": "flink",
+  "jobManager": {
+    "resource": {
+      "cpu": 0.5,
+      "memory": "1024m"
+    },
+    "podTemplate": {
+      "spec": {
+        "containers": [
+          {
+            "name": "flink-main-container",
+            "env": [],
+            "envFrom": []
+          }
+        ]
+      }
+    }
+  },
+  "taskManager": {
+    "replicas": 1,
+    "resource": {
+      "cpu": 1.0,
+      "memory": "2048m"
+    },
+    "podTemplate": {
+      "spec": {
+        "containers": [
+          {
+            "name": "flink-main-container",
+            "env": [],
+            "envFrom": []
+          }
+        ]
+      }
+    }
+  },
+  "job": {
+    "jarURI": "local:///opt/flink/opt/flink-python.jar",
+    "entryClass": "org.apache.flink.client.python.PythonDriver",
+    "args": [],
+    "parallelism": 1,
+    "upgradeMode": "stateless"
+  }
+}

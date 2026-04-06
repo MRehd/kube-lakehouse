@@ -34,6 +34,7 @@ from minio import BucketArgs, Minio, MinioArgs
 from polaris import CatalogArgs, CatalogGrantArgs, Polaris, PolarisArgs, PrincipalArgs, RoleArgs
 from psql import DatabaseArgs, GrantArgs, Psql, PsqlArgs, UserArgs
 from trino import Trino, TrinoArgs, TrinoAutoscalingArgs, TrinoIcebergCatalogArgs
+from flink import Flink, FlinkArgs, FlinkIcebergCatalogArgs, FlinkJobArgs
 from secrets import LakehouseSecrets, SecretArgs
 from service_accounts import PolicyRuleArgs, ServiceAccountArgs, ServiceAccounts, ServiceAccountsArgs
 
@@ -580,6 +581,57 @@ trino.create_catalogs(
 
 
 # =============================================================================
+# APACHE FLINK - STREAM PROCESSING
+# =============================================================================
+
+flink_name = f'flink-{project_name}-{env}'
+flink = Flink(
+    flink_name,
+    FlinkArgs(
+        namespace=ns.metadata.name,
+        release_name=flink_name,
+    ),
+    opts=pulumi.ResourceOptions(depends_on=[ns]),
+)
+
+# Jobs are submitted via flink.submit_job() once job images are built.
+# Example:
+#
+# flink.submit_job(
+#     f'job-{project_name}-{env}-btc-ingest',
+#     FlinkJobArgs(
+#         job_name='btc-kafka-to-iceberg',
+#         image='my-registry/flink-btc-job',
+#         python_script='/opt/flink/jobs/ingest.py',
+#         parallelism=2,
+#         credentials_secret=flink_credentials_secret,
+#         iceberg_catalogs=[
+#             FlinkIcebergCatalogArgs(
+#                 name='bronze',
+#                 polaris_endpoint=polaris.endpoint,
+#                 warehouse='bronze',
+#                 credentials_secret=flink_credentials_secret,
+#                 s3_endpoint=minio.endpoint,
+#                 s3_access_key=credentials['minio']['user'],
+#                 s3_secret_key=credentials['minio']['password'],
+#             ),
+#         ],
+#         autoscaling_enabled=True,
+#         autoscaling_target_utilization=0.75,
+#         autoscaling_metrics_window='5m',
+#         autoscaling_stabilization_interval='1m',
+#         extra_flink_config={
+#             'restart-strategy.type': 'exponential-delay',
+#             'restart-strategy.exponential-delay.initial-backoff': '1 s',
+#             'restart-strategy.exponential-delay.max-backoff': '5 min',
+#             'restart-strategy.exponential-delay.reset-backoff-threshold': '10 min',
+#         },
+#     ),
+#     opts=pulumi.ResourceOptions(depends_on=[polaris_principals]),
+# )
+
+
+# =============================================================================
 # STACK EXPORTS
 # =============================================================================
 
@@ -609,3 +661,6 @@ pulumi.export('trino_url', trino.ui_url)
 
 # KEDA
 pulumi.export('keda_namespace', keda.namespace)
+
+# Flink
+pulumi.export('flink_namespace', flink.namespace)
