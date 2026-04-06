@@ -134,8 +134,8 @@ minio = Minio(
     MinioArgs(
         namespace=ns.metadata.name,
         release_name=minio_name,
-        mode='standalone',
-        replicas=1,
+        mode='distributed',
+        replicas=4,
         persistence_size='10Gi',
         root_user=credentials['minio']['user'],
         root_password=credentials['minio']['password'],
