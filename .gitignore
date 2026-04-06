@@ -2,3 +2,4 @@
 venv/
 *.volume
 uv.lock
+.claude

@@ -28,6 +28,7 @@ from pulumi_kubernetes.core.v1 import Namespace
 from pulumi_kubernetes.helm.v3 import Chart, ChartOpts, FetchOpts
 
 from kafka import AutoscalingArgs, Kafka, KafkaArgs, TopicArgs
+from kafka_ui import KafkaUi, KafkaUiArgs
 from keda import Keda, KedaArgs, KafkaTriggerArgs, ScaledObjectArgs
 from minio import BucketArgs, Minio, MinioArgs
 from polaris import CatalogArgs, CatalogGrantArgs, Polaris, PolarisArgs, PrincipalArgs, RoleArgs
@@ -353,23 +354,36 @@ kafka = Kafka(
     KafkaArgs(
         namespace=ns.metadata.name,
         release_name=kafka_name,
-        replicas=3,
-        persistence_size='10Gi',
-        ingress_enabled=True,
-        ingress_domain=domain,
-        ingress_class_name='nginx',
+        replicas=1,
+        persistence_size='1Gi',
         autoscaling=AutoscalingArgs(
             enabled=True,
-            min_replicas=3,
-            max_replicas=5,
+            min_replicas=1,
+            max_replicas=2,
             target_cpu_utilization=70,
         ),
         topics=[
-            TopicArgs(name='btc', partitions=6, replicas=3),
-            TopicArgs(name='eth', partitions=6, replicas=3),
+            TopicArgs(name='btc', partitions=2, replicas=1),
+            TopicArgs(name='eth', partitions=2, replicas=1)
         ],
     ),
     opts=pulumi.ResourceOptions(depends_on=[ns, ingress_nginx]),
+)
+
+# Deploy Kafka UI for cluster inspection and management
+kafka_ui_name = f'kafka-ui-{project_name}-{env}'
+kafka_ui = KafkaUi(
+    kafka_ui_name,
+    KafkaUiArgs(
+        namespace=ns.metadata.name,
+        release_name=kafka_ui_name,
+        bootstrap_servers=kafka.bootstrap_servers,
+        cluster_name=f'{project_name}-{env}',
+        ingress_enabled=True,
+        ingress_domain=domain,
+        ingress_class_name='nginx',
+    ),
+    opts=pulumi.ResourceOptions(depends_on=[kafka]),
 )
 
 
@@ -379,8 +393,6 @@ kafka = Kafka(
 
 # Deploy the KEDA operator for event-driven worker scaling.
 # KEDA watches Kafka consumer group lag and adjusts worker replica counts.
-# ScaledObjects for Spark, Flink, and Trino workers will be added here
-# once those components are deployed.
 keda_name = f'keda-{project_name}-{env}'
 keda = Keda(
     keda_name,
@@ -477,6 +489,9 @@ pulumi.export('polaris_url', polaris.api_url)
 # Kafka endpoints
 pulumi.export('kafka_bootstrap_servers', kafka.bootstrap_servers)
 pulumi.export('kafka_bootstrap_endpoint', kafka.bootstrap_endpoint)
+
+# Kafka UI
+pulumi.export('kafka_ui_url', kafka_ui.ui_url)
 
 # KEDA
 pulumi.export('keda_namespace', keda.namespace)

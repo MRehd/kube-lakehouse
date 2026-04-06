@@ -8,7 +8,6 @@ from typing import List, Optional, TypeVar
 import pulumi
 from pulumi import Input, Output
 from pulumi_kubernetes.helm.v3 import Chart, ChartOpts
-from pulumi_kubernetes.networking.v1 import Ingress
 
 # Config directory for templates
 CONFIG_DIR = Path(__file__).parent.parent / 'config'
@@ -121,18 +120,6 @@ class KafkaArgs:
     extra_config: str = ''
     '''Additional Kafka broker configuration (as string, one per line).'''
 
-    ingress_enabled: bool = True
-    '''Enable Ingress for external access.'''
-
-    ingress_domain: Optional[str] = None
-    '''Domain for Ingress (e.g., 'k8lh.local'). Creates kafka.<domain>.'''
-
-    ingress_class_name: str = 'nginx'
-    '''Ingress class name (e.g., 'nginx', 'traefik').'''
-
-    ingress_annotations: Optional[dict] = None
-    '''Additional annotations for the Ingress resource.'''
-
     topics: List[TopicArgs] = field(default_factory=list)
     '''Topics to create on startup via provisioning.'''
 
@@ -211,12 +198,6 @@ class Kafka(pulumi.ComponentResource):
             self._release_name, ':', str(args.listener_port)
         )
 
-        # Create Ingress if enabled
-        self.ingress = None
-        if args.ingress_enabled and args.ingress_domain:
-            self.kafka_host = f'kafka.{args.ingress_domain}'
-            self.ingress = self._create_ingress(args)
-
         self.register_outputs({
             'namespace': self.namespace,
             'bootstrap_servers': self.bootstrap_servers,
@@ -293,30 +274,4 @@ class Kafka(pulumi.ComponentResource):
                 values=values,
             ),
             opts=pulumi.ResourceOptions(parent=self),
-        )
-
-    def _create_ingress(self, args: KafkaArgs) -> Ingress:
-        '''Create Ingress for Kafka external access.'''
-        # Load ingress spec from shared config and override with args
-        ingress_spec = json.loads((CONFIG_DIR / 'helm/helm_values_ingress.json').read_text())
-        ingress_spec['ingressClassName'] = args.ingress_class_name
-        ingress_spec['rules'][0]['host'] = self.kafka_host
-        ingress_spec['rules'][0]['http']['paths'][0]['backend']['service']['name'] = self._release_name
-        ingress_spec['rules'][0]['http']['paths'][0]['backend']['service']['port']['number'] = args.listener_port
-
-        annotations = {
-            'nginx.ingress.kubernetes.io/ssl-passthrough': 'true',
-            'nginx.ingress.kubernetes.io/backend-protocol': 'TCP',
-        }
-        if args.ingress_annotations:
-            annotations.update(args.ingress_annotations)
-
-        return Ingress(
-            f'{self._release_name}-ingress',
-            metadata={
-                'namespace': self._namespace,
-                'annotations': annotations,
-            },
-            spec=ingress_spec,
-            opts=pulumi.ResourceOptions(parent=self, depends_on=[self.chart]),
         )
