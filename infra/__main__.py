@@ -27,6 +27,7 @@ import pulumi
 from pulumi_kubernetes.core.v1 import Namespace
 from pulumi_kubernetes.helm.v3 import Chart, ChartOpts, FetchOpts
 
+from kafka import AutoscalingArgs, Kafka, KafkaArgs, TopicArgs
 from minio import BucketArgs, Minio, MinioArgs
 from polaris import CatalogArgs, CatalogGrantArgs, Polaris, PolarisArgs, PrincipalArgs, RoleArgs
 from psql import DatabaseArgs, GrantArgs, Psql, PsqlArgs, UserArgs
@@ -340,6 +341,38 @@ polaris.create_principals(
 
 
 # =============================================================================
+# APACHE KAFKA - EVENT STREAMING
+# =============================================================================
+
+# Deploy Apache Kafka using Bitnami Helm chart for event streaming
+# Used for real-time data ingestion and change data capture
+kafka_name = f'kafka-{project_name}-{env}'
+kafka = Kafka(
+    kafka_name,
+    KafkaArgs(
+        namespace=ns.metadata.name,
+        release_name=kafka_name,
+        replicas=3,
+        persistence_size='10Gi',
+        ingress_enabled=True,
+        ingress_domain=domain,
+        ingress_class_name='nginx',
+        autoscaling=AutoscalingArgs(
+            enabled=True,
+            min_replicas=3,
+            max_replicas=5,
+            target_cpu_utilization=70,
+        ),
+        topics=[
+            TopicArgs(name='btc', partitions=6, replicas=3),
+            TopicArgs(name='eth', partitions=6, replicas=3),
+        ],
+    ),
+    opts=pulumi.ResourceOptions(depends_on=[ns, ingress_nginx]),
+)
+
+
+# =============================================================================
 # STACK EXPORTS
 # =============================================================================
 
@@ -355,3 +388,7 @@ pulumi.export('minio_console_url', minio.console_url)
 # Polaris endpoints
 pulumi.export('polaris_endpoint', polaris.endpoint)
 pulumi.export('polaris_url', polaris.api_url)
+
+# Kafka endpoints
+pulumi.export('kafka_bootstrap_servers', kafka.bootstrap_servers)
+pulumi.export('kafka_bootstrap_endpoint', kafka.bootstrap_endpoint)

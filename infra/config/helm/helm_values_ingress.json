@@ -1,8 +1,8 @@
 {
-  "ingressClassName": "{{INGRESS_CLASS_NAME}}",
+  "ingressClassName": "nginx",
   "rules": [
     {
-      "host": "{{HOST}}",
+      "host": "app.local",
       "http": {
         "paths": [
           {
@@ -10,8 +10,8 @@
             "pathType": "Prefix",
             "backend": {
               "service": {
-                "name": "{{SERVICE_NAME}}",
-                "port": {"number": 8181}
+                "name": "service",
+                "port": {"number": 8080}
               }
             }
           }

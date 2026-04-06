@@ -1,0 +1,88 @@
+{
+  "fullnameOverride": "",
+  "image": {
+    "registry": "docker.io",
+    "repository": "bitnamilegacy/kafka",
+    "tag": "4.0.0-debian-12-r0"
+  },
+  "controller": {
+    "replicaCount": 3,
+    "persistence": {
+      "enabled": true,
+      "size": "10Gi",
+      "storageClass": ""
+    },
+    "resources": {
+      "requests": {
+        "memory": "512Mi",
+        "cpu": "250m"
+      },
+      "limits": {
+        "memory": "1Gi",
+        "cpu": "500m"
+      }
+    },
+    "heapOpts": "-Xms512m -Xmx1g"
+  },
+  "broker": {
+    "replicaCount": 0,
+    "persistence": {
+      "enabled": true,
+      "size": "10Gi",
+      "storageClass": ""
+    },
+    "resources": {
+      "requests": {
+        "memory": "1Gi",
+        "cpu": "500m"
+      },
+      "limits": {
+        "memory": "2Gi",
+        "cpu": "1000m"
+      }
+    },
+    "heapOpts": "-Xms512m -Xmx1g"
+  },
+  "listeners": {
+    "client": {
+      "protocol": "PLAINTEXT",
+      "containerPort": 9092
+    },
+    "controller": {
+      "protocol": "PLAINTEXT",
+      "containerPort": 9093
+    },
+    "interbroker": {
+      "protocol": "PLAINTEXT",
+      "containerPort": 9094
+    }
+  },
+  "extraConfig": "",
+  "log": {
+    "retentionHours": 168,
+    "retentionBytes": -1
+  },
+  "defaultReplicationFactor": 1,
+  "numPartitions": 3,
+  "autoCreateTopicsEnable": true,
+  "deleteTopicEnable": true,
+  "provisioning": {
+    "enabled": false,
+    "topics": []
+  },
+  "metrics": {
+    "kafka": {
+      "enabled": false
+    },
+    "jmx": {
+      "enabled": false
+    }
+  },
+  "autoscaling": {
+    "enabled": false,
+    "minReplicas": 1,
+    "maxReplicas": 5,
+    "targetCPU": 70,
+    "targetMemory": ""
+  }
+}
