@@ -28,6 +28,7 @@ from pulumi_kubernetes.core.v1 import Namespace
 from pulumi_kubernetes.helm.v3 import Chart, ChartOpts, FetchOpts
 
 from kafka import AutoscalingArgs, Kafka, KafkaArgs, TopicArgs
+from keda import Keda, KedaArgs, KafkaTriggerArgs, ScaledObjectArgs
 from minio import BucketArgs, Minio, MinioArgs
 from polaris import CatalogArgs, CatalogGrantArgs, Polaris, PolarisArgs, PrincipalArgs, RoleArgs
 from psql import DatabaseArgs, GrantArgs, Psql, PsqlArgs, UserArgs
@@ -373,6 +374,90 @@ kafka = Kafka(
 
 
 # =============================================================================
+# KEDA - KUBERNETES EVENT-DRIVEN AUTOSCALING
+# =============================================================================
+
+# Deploy the KEDA operator for event-driven worker scaling.
+# KEDA watches Kafka consumer group lag and adjusts worker replica counts.
+# ScaledObjects for Spark, Flink, and Trino workers will be added here
+# once those components are deployed.
+keda_name = f'keda-{project_name}-{env}'
+keda = Keda(
+    keda_name,
+    KedaArgs(
+        namespace=ns.metadata.name,
+        release_name=keda_name,
+        operator_replicas=2,
+        metrics_server_replicas=1,
+        watch_namespace='',  # Watch all namespaces
+    ),
+    opts=pulumi.ResourceOptions(depends_on=[ns, ingress_nginx]),
+)
+
+# Uncomment and adapt when adding compute workers:
+#
+# keda.create_scaled_object(
+#     f'scaledobject-{project_name}-{env}-spark',
+#     ScaledObjectArgs(
+#         name='spark-worker-scaler',
+#         target_name=f'spark-worker-{project_name}-{env}',
+#         target_kind='Deployment',
+#         min_replica_count=1,
+#         max_replica_count=10,
+#         triggers=[
+#             KafkaTriggerArgs(
+#                 bootstrap_servers=kafka.bootstrap_servers,
+#                 consumer_group='spark-consumer-group',
+#                 topic='btc',
+#                 lag_threshold=10,
+#             ),
+#         ],
+#     ),
+#     opts=pulumi.ResourceOptions(depends_on=[kafka]),
+# )
+#
+# keda.create_scaled_object(
+#     f'scaledobject-{project_name}-{env}-flink',
+#     ScaledObjectArgs(
+#         name='flink-taskmanager-scaler',
+#         target_name=f'flink-taskmanager-{project_name}-{env}',
+#         target_kind='Deployment',
+#         min_replica_count=1,
+#         max_replica_count=10,
+#         triggers=[
+#             KafkaTriggerArgs(
+#                 bootstrap_servers=kafka.bootstrap_servers,
+#                 consumer_group='flink-consumer-group',
+#                 topic='btc',
+#                 lag_threshold=10,
+#             ),
+#         ],
+#     ),
+#     opts=pulumi.ResourceOptions(depends_on=[kafka]),
+# )
+#
+# keda.create_scaled_object(
+#     f'scaledobject-{project_name}-{env}-trino',
+#     ScaledObjectArgs(
+#         name='trino-worker-scaler',
+#         target_name=f'trino-worker-{project_name}-{env}',
+#         target_kind='Deployment',
+#         min_replica_count=1,
+#         max_replica_count=10,
+#         triggers=[
+#             KafkaTriggerArgs(
+#                 bootstrap_servers=kafka.bootstrap_servers,
+#                 consumer_group='trino-consumer-group',
+#                 topic='btc',
+#                 lag_threshold=10,
+#             ),
+#         ],
+#     ),
+#     opts=pulumi.ResourceOptions(depends_on=[kafka]),
+# )
+
+
+# =============================================================================
 # STACK EXPORTS
 # =============================================================================
 
@@ -392,3 +477,6 @@ pulumi.export('polaris_url', polaris.api_url)
 # Kafka endpoints
 pulumi.export('kafka_bootstrap_servers', kafka.bootstrap_servers)
 pulumi.export('kafka_bootstrap_endpoint', kafka.bootstrap_endpoint)
+
+# KEDA
+pulumi.export('keda_namespace', keda.namespace)

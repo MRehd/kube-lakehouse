@@ -1,0 +1,31 @@
+{
+  "fullnameOverride": "",
+  "watchNamespace": "",
+  "operator": {
+    "replicaCount": 2,
+    "resources": {
+      "requests": { "cpu": "100m", "memory": "128Mi" },
+      "limits":   { "cpu": "500m", "memory": "512Mi" }
+    }
+  },
+  "metricsServer": {
+    "replicaCount": 1,
+    "resources": {
+      "requests": { "cpu": "100m", "memory": "128Mi" },
+      "limits":   { "cpu": "500m", "memory": "512Mi" }
+    }
+  },
+  "webhooks": {
+    "enabled": true
+  },
+  "podAnnotations": {
+    "keda-operator": {},
+    "keda-metrics-apiserver": {},
+    "keda-webhooks": {}
+  },
+  "logging": {
+    "operator":     { "level": "info", "format": "console", "timeEncoding": "rfc3339" },
+    "metricServer": { "level": "0",    "stackTraceLevel": "1" },
+    "webhooks":     { "level": "info", "format": "console", "timeEncoding": "rfc3339" }
+  }
+}
