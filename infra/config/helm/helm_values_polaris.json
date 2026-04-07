@@ -31,5 +31,17 @@
     "minReplicas": 1,
     "maxReplicas": 2
   },
-  "persistence": {"type": "in-memory"}
+  "persistence": {"type": "in-memory"},
+  "livenessProbe": {
+    "initialDelaySeconds": 60,
+    "periodSeconds": 15,
+    "failureThreshold": 5,
+    "timeoutSeconds": 10
+  },
+  "readinessProbe": {
+    "initialDelaySeconds": 60,
+    "periodSeconds": 15,
+    "failureThreshold": 5,
+    "timeoutSeconds": 10
+  }
 }

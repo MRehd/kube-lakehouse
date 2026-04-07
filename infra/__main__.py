@@ -650,8 +650,10 @@ airflow_metadata_secret = LakehouseSecrets(
         SecretArgs(name='airflow-fernet',    data={'fernet-key':           credentials['airflow']['fernet_key']}),
         SecretArgs(name='airflow-webserver', data={'webserver-secret-key': credentials['airflow']['webserver_secret_key']}),
         SecretArgs(name='airflow-git-credentials', data={
-            'GITSYNC_USERNAME': 'x-token',
-            'GITSYNC_PASSWORD': credentials['airflow']['git_token'],
+            'GIT_SYNC_USERNAME':  'x-token',
+            'GIT_SYNC_PASSWORD':  credentials['airflow']['git_token'],
+            'GITSYNC_USERNAME':   'x-token',
+            'GITSYNC_PASSWORD':   credentials['airflow']['git_token'],
         }),
     ],
     opts=pulumi.ResourceOptions(depends_on=[ns, psql]),
