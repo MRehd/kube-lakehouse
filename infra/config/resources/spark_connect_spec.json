@@ -1,0 +1,38 @@
+{
+  "replicas": 1,
+  "selector": {
+    "matchLabels": {}
+  },
+  "template": {
+    "metadata": {
+      "labels": {}
+    },
+    "spec": {
+      "serviceAccountName": "",
+      "initContainers": [{
+        "name": "setup-jars",
+        "image": "",
+        "command": ["sh", "-c",
+          "cp /opt/spark/jars/*.jar /extra-jars/ && curl -fL -o /extra-jars/hadoop-aws.jar https://repo1.maven.org/maven2/org/apache/hadoop/hadoop-aws/3.4.0/hadoop-aws-3.4.0.jar && curl -fL -o /extra-jars/aws-java-sdk-bundle.jar https://repo1.maven.org/maven2/com/amazonaws/aws-java-sdk-bundle/1.12.367/aws-java-sdk-bundle-1.12.367.jar"
+        ],
+        "volumeMounts": [{"name": "jars", "mountPath": "/extra-jars"}]
+      }],
+      "volumes": [{"name": "jars", "emptyDir": {}}],
+      "containers": [{
+        "name": "spark-connect",
+        "image": "",
+        "command": ["/opt/spark/bin/spark-submit"],
+        "args": [],
+        "ports": [
+          {"containerPort": 15002, "name": "grpc"},
+          {"containerPort": 4040, "name": "ui"}
+        ],
+        "resources": {
+          "requests": {"cpu": "500m", "memory": "1Gi"},
+          "limits":   {"cpu": "2",    "memory": "2Gi"}
+        },
+        "volumeMounts": [{"name": "jars", "mountPath": "/opt/spark/jars"}]
+      }]
+    }
+  }
+}

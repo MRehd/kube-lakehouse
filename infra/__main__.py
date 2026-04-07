@@ -610,6 +610,7 @@ spark = Spark(
         namespace=ns.metadata.name,
         release_name=spark_name,
         service_account_name=spark_sa.metadata.name,
+        connect_master='k8s://https://kubernetes.default.svc:443',
         s3_endpoint=minio.endpoint,
         s3_access_key=credentials['minio']['user'],
         s3_secret_key=credentials['minio']['password'],
@@ -708,6 +709,7 @@ pulumi.export('producer_url', producer.url)
 
 # Spark
 pulumi.export('spark_namespace', spark.namespace)
+pulumi.export('spark_connect_server_url', spark.connect_server_url)
 pulumi.export('spark_history_server_url', spark.history_server_url)
 
 # Flink
