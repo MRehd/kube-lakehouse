@@ -21,8 +21,8 @@ HISTORY_SERVER_PORT = 18080
 class SparkArgs:
     namespace: Input[str] = 'default'
     release_name: Optional[str] = None
-    chart_version: str = '1.4.6'
-    '''spark-on-k8s-operator Helm chart version.'''
+    chart_version: str = '2.5.0'
+    '''spark-on-k8s-operator Helm chart version. 2.x required for Spark 4 support.'''
 
     service_account_name: Input[str] = 'spark'
     '''
@@ -32,7 +32,7 @@ class SparkArgs:
 
     # History Server
     history_server_image: str = 'apache/spark'
-    history_server_image_tag: str = '3.5.3'
+    history_server_image_tag: str = '4.0.0'
     event_log_bucket: str = 'spark-logs'
     '''MinIO bucket where Spark writes event logs.'''
 
@@ -60,11 +60,23 @@ class Spark(pulumi.ComponentResource):
     UI at spark.<domain> showing completed and running jobs.
 
     Airflow integration:
-        SparkApplication CRs must set:
-          driver.serviceAccount: <service_account_name>
+        Use apache-airflow-providers-cncf-kubernetes with SparkKubernetesOperator.
+        Each SparkApplication CR must include:
+
+          driver:
+            serviceAccount: <service_account_name>   # SA created via ServiceAccounts module
+
           sparkConf:
             spark.eventLog.enabled: "true"
             spark.eventLog.dir: "s3a://spark-logs/"
+            spark.hadoop.fs.s3a.endpoint: "http://<minio-svc>.<namespace>.svc.cluster.local:9000"
+            spark.hadoop.fs.s3a.access.key: "<minio-user>"
+            spark.hadoop.fs.s3a.secret.key: "<minio-password>"
+            spark.hadoop.fs.s3a.path.style.access: "true"
+
+        The History Server is passive — it reads log files from the spark-logs MinIO
+        bucket after jobs finish. It has no direct connection to the operator or any
+        running cluster. Jobs only appear in the UI if the sparkConf entries above are set.
     '''
 
     def __init__(
@@ -124,10 +136,9 @@ class Spark(pulumi.ComponentResource):
         hs_spec = json.loads((CONFIG_DIR / 'resources/history_server_spec.json').read_text())
         hs_spec['selector']['matchLabels']          = app_label
         hs_spec['template']['metadata']['labels']   = app_label
-        hs_spec['template']['spec']['containers'][0]['image'] = hs_image
-        hs_spec['template']['spec']['containers'][0]['env']   = [
-            {'name': 'SPARK_HISTORY_OPTS', 'value': spark_history_opts},
-        ]
+        hs_spec['template']['spec']['initContainers'][0]['image'] = hs_image
+        hs_spec['template']['spec']['containers'][0]['image']    = hs_image
+        hs_spec['template']['spec']['containers'][0]['env'][0]['value'] = spark_history_opts
 
         Deployment(
             f'{name}-history-server',

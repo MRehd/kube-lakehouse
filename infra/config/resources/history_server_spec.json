@@ -8,17 +8,29 @@
       "labels": {}
     },
     "spec": {
+      "initContainers": [{
+        "name": "setup-jars",
+        "image": "",
+        "command": ["sh", "-c",
+          "cp /opt/spark/jars/*.jar /extra-jars/ && curl -fL -o /extra-jars/hadoop-aws.jar https://repo1.maven.org/maven2/org/apache/hadoop/hadoop-aws/3.4.0/hadoop-aws-3.4.0.jar && curl -fL -o /extra-jars/aws-java-sdk-bundle.jar https://repo1.maven.org/maven2/com/amazonaws/aws-java-sdk-bundle/1.12.367/aws-java-sdk-bundle-1.12.367.jar"
+        ],
+        "volumeMounts": [{"name": "jars", "mountPath": "/extra-jars"}]
+      }],
+      "volumes": [{"name": "jars", "emptyDir": {}}],
       "containers": [{
         "name": "history-server",
         "image": "",
         "command": ["/opt/spark/bin/spark-class"],
         "args": ["org.apache.spark.deploy.history.HistoryServer"],
-        "env": [],
+        "env": [
+          {"name": "SPARK_HISTORY_OPTS", "value": ""}
+        ],
         "ports": [{"containerPort": 18080}],
         "resources": {
           "requests": {"cpu": "100m", "memory": "512Mi"},
           "limits":   {"cpu": "500m", "memory": "1Gi"}
-        }
+        },
+        "volumeMounts": [{"name": "jars", "mountPath": "/opt/spark/jars"}]
       }]
     }
   }
