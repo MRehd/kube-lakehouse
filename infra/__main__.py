@@ -68,6 +68,7 @@ credentials = {
     'airflow': {
         'user': config.require('airflow_postgres_user'),
         'password': config.require_secret('airflow_postgres_password'),
+        'admin_password': config.require_secret('airflow_admin_password'),
         'fernet_key': config.require_secret('airflow_fernet_key'),
         'webserver_secret_key': config.require_secret('airflow_webserver_secret_key'),
         'git_token': config.require_secret('airflow_git_token'),
@@ -665,6 +666,7 @@ airflow = Airflow(
     AirflowArgs(
         namespace=ns.metadata.name,
         release_name=airflow_name,
+        admin_password=credentials['airflow']['admin_password'],
         db_metadata_secret='airflow-metadata',
         fernet_key_secret='airflow-fernet',
         webserver_secret_key_secret='airflow-webserver',

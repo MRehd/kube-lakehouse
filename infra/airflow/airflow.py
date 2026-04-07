@@ -53,6 +53,13 @@ class AirflowArgs:
     webserver_secret_key_secret_key: str = 'webserver-secret-key'
     '''K8s secret holding the Flask session signing key.'''
 
+    # Admin user
+    admin_username: str = 'admin'
+    admin_password: Input[str] = 'admin'
+    admin_email: str = 'admin@example.com'
+    admin_firstname: str = 'Admin'
+    admin_lastname: str = 'User'
+
     # Webserver
     webserver_replicas: int = 1
 
@@ -167,15 +174,17 @@ class Airflow(pulumi.ComponentResource):
         # Collect all Output values from connections so we can resolve them together
         conn_ids = [c.conn_id for c in args.connections]
         conn_uris = [Output.from_input(c.uri) for c in args.connections]
+        admin_password = Output.from_input(args.admin_password)
 
-        return Output.all(*conn_uris).apply(lambda resolved: self._assemble_values(
+        return Output.all(*conn_uris, admin_password).apply(lambda resolved: self._assemble_values(
             base=base,
             args=args,
             conn_ids=conn_ids,
-            conn_uris=list(resolved),
+            conn_uris=list(resolved[:-1]),
+            admin_password=resolved[-1],
         ))
 
-    def _assemble_values(self, base: dict, args: AirflowArgs, conn_ids: list, conn_uris: list) -> dict:
+    def _assemble_values(self, base: dict, args: AirflowArgs, conn_ids: list, conn_uris: list, admin_password: str) -> dict:
         values = base.copy()
 
         values['executor'] = args.executor
@@ -189,6 +198,16 @@ class Airflow(pulumi.ComponentResource):
         values['fernetKeySecretKey'] = args.fernet_key_secret_key
         values['webserverSecretKeySecretName'] = args.webserver_secret_key_secret
         values['webserverSecretKeySecretKey'] = args.webserver_secret_key_secret_key
+
+        # Admin user
+        values['airflowUser'] = {
+            'username':  args.admin_username,
+            'password':  admin_password,
+            'email':     args.admin_email,
+            'firstname': args.admin_firstname,
+            'lastname':  args.admin_lastname,
+            'role':      'Admin',
+        }
 
         # Webserver replicas
         values.setdefault('webserver', {})['replicas'] = args.webserver_replicas

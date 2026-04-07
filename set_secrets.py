@@ -15,7 +15,7 @@ for key, value in keys.items():
         print(f'SKIP  k8lh:{key} (empty)')
         continue
     result = subprocess.run(
-        ['pulumi', 'config', 'set', '--secret', f'k8lh:{key}', value, '--stack', 'dev'],
+        ['pulumi', 'config', 'set', '--secret', '--overwrite', f'k8lh:{key}', value, '--stack', 'dev'],
         cwd=INFRA,
         capture_output=True,
         text=True,

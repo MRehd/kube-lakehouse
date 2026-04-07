@@ -4,24 +4,26 @@ config:
   k8lh:node: docker-desktop
   k8lh:minio_root_user: minioadmin
   k8lh:minio_root_password:
-    secure: v1:ObS0H8YuQ5JcZzK6:un0hyFsdFOQ6z+WtO30ZiBMcROL5XjS7eHk=
+    secure: v1:4aN2wVvP/fHZ5zTZ:76kexoWjf0Rnlpw2Ah852FcAVx5DpBzEI9A=
   k8lh:postgres_admin_user: postgres
   k8lh:postgres_admin_password:
-    secure: v1:zqlpfGFpkaWkaFBF:TIcXI0ZKCFO8Cm+iXJYxoVzQbjG65EH9Flk=
+    secure: v1:PXddMhFFjuiTJnft:4RswMeAymqqshvOA69dssfFvhDllwJc7ls4=
   k8lh:polaris_postgres_user: polaris
   k8lh:polaris_postgres_password:
-    secure: v1:e1EJEsBI6bmnbRyX:l+j5wm+Fk/mrbtje7YfxmdBPgU7QrWA=
+    secure: v1:xdyv6hxOU09z5ye1:iJSrKCuJgpugoYbBr8MQG87ne76xSe0=
   k8lh:airflow_postgres_user: airflow
   k8lh:airflow_postgres_password:
-    secure: v1:ydlfXp7BfurpE64O:gmx7Ib0ubsHZ+XHdoVW+JUTLww6dy/I=
+    secure: v1:RxdGR5i7+wWuzoZD:xkew9JtL0q+MvA9TYGeflbkqxQTzowE=
   k8lh:docker_registry_username: ''
   k8lh:docker_registry_password:
     secure: v1:pkbHlL3MnNpyPXiG:EeNRXqb2gSA1X1dLmJ3YeA==
   k8lh:docker_producer_image_name: localhost:5000/producer
   k8lh:airflow_git_branch: master
   k8lh:airflow_fernet_key:
-    secure: v1:mUIWxVeyA7QyEwXy:GBFNZx/Yu8CWkYjI1nw8p6qQNodR7nUwySOcl0A2a75TaVisUkTtLKaqlQbHEtQk7weNMYRwstLetA1/
+    secure: v1:OiWQlzcsSKdi0yoN:Q0C9tFc2Br3b1cHAyMlRqgFLZ0ZQ56pWcHAria3Ym2sODpDL8Ai+tmRcUF9IX4Z/opWh64T5iVMQwwtQ
   k8lh:airflow_webserver_secret_key:
-    secure: v1:Pe9AjH1SB3yfV09k:NgRuocNf65LQBnx7IeiWwBxsALHca+5dJMPcmRYHvAqfdL3r/xlHWowJpI1IAbxa6IjeYf9x7aAZznw9O1NRyZ5fRLTljBGClRbIUb3HO8A=
+    secure: v1:GV95r7gOtksakbi8:wadADjXJwV+Ob4VgQ64JajHp9zcyG+JC5YNcRgOrstLlK76v9hbQIc+21FXJZ0djRFUUoqkkrIOFiFlbeRuaKSG0NwnWFOu/zArYqpzE3Tw=
   k8lh:airflow_git_token:
-    secure: v1:C0oA5Yp+0lLhmY5M:soclDged4l2hAL4c56V77uZp9mukEexX5ijJosRj59zj1nmtCTvRoFkyr706MmuH63e2ktaJS7IT9sQn7qHYYu/DYw6D5eir8zBT0YTBnZv+4Yw+ceypZcZ2oNr9nJN2ukavZol4nVPOWfJxjg==
+    secure: v1:c8OdvBzCJQzMDSwN:7u/e2lp9DUIEuzSLo0WyaSKVA6ctGSvQL9+DrxQOIyqeUvQEFDzcC1C44t2mXsBwXX02z2yugwaX+q2W9bpA/xpaqlJYgqMrR9Y94ZuFPWC1J2yKRka2CXaxLjmYvThr+xazoJYPhWIPI+WvsA==
+  k8lh:airflow_admin_password:
+    secure: v1:jNqL61IecPajpiB+:W9HIODqti/18dV1VI9dyTTQIl1oH

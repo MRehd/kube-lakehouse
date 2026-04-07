@@ -31,6 +31,9 @@ config:
   k8lh:airflow_postgres_password:
     description: PostgreSQL Airflow password
     secret: true
+  k8lh:airflow_admin_password:
+    description: Airflow admin UI password
+    secret: true
   k8lh:airflow_fernet_key:
     description: Fernet key for Airflow connection/variable encryption
     secret: true
