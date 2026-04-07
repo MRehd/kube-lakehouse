@@ -8,7 +8,7 @@
         {
           "name": "psql",
           "image": "postgres:16-alpine",
-          "command": ["sh", "-c", "sleep 5 && echo \"$SQL_SCRIPT\" | psql -v ON_ERROR_STOP=1"],
+          "command": ["sh", "-c", "until pg_isready -h $PGHOST -p $PGPORT -U $PGUSER; do echo 'waiting for postgres...'; sleep 3; done && echo \"$SQL_SCRIPT\" | psql -v ON_ERROR_STOP=1"],
           "env": [
             {"name": "PGHOST", "value": ""},
             {"name": "PGPORT", "value": "5432"},

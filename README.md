@@ -47,10 +47,12 @@ C:\Windows\System32\drivers\etc\hosts
 127.0.0.1 minio-console.k8lh.local
 127.0.0.1 polaris.k8lh.local
 127.0.0.1 kafka-ui.k8lh.local
+127.0.0.1 spark.k8lh.local
 127.0.0.1 producer.k8lh.local
 
 # Start docker local registry
 docker run -d -p 5000:5000 --name registry registry:2
+docker start registry
 
 # Pulumi commands from
 cd infra

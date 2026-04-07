@@ -1,0 +1,25 @@
+{
+  "replicas": 1,
+  "selector": {
+    "matchLabels": {}
+  },
+  "template": {
+    "metadata": {
+      "labels": {}
+    },
+    "spec": {
+      "containers": [{
+        "name": "history-server",
+        "image": "",
+        "command": ["/opt/spark/bin/spark-class"],
+        "args": ["org.apache.spark.deploy.history.HistoryServer"],
+        "env": [],
+        "ports": [{"containerPort": 18080}],
+        "resources": {
+          "requests": {"cpu": "100m", "memory": "512Mi"},
+          "limits":   {"cpu": "500m", "memory": "1Gi"}
+        }
+      }]
+    }
+  }
+}

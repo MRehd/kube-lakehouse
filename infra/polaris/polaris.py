@@ -290,7 +290,7 @@ class Polaris(pulumi.ComponentResource):
         if args.ingress_annotations:
             annotations.update(args.ingress_annotations)
 
-        spec = json.loads((CONFIG_DIR / 'helm/helm_values_ingress.json').read_text())
+        spec = json.loads((CONFIG_DIR / 'resources/ingress_spec.json').read_text())
         spec['ingressClassName'] = args.ingress_class_name
         spec['rules'][0]['host'] = self.api_host
         spec['rules'][0]['http']['paths'][0]['backend']['service']['name'] = self._release_name

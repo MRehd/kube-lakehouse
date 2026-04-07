@@ -36,6 +36,7 @@ from psql import DatabaseArgs, GrantArgs, Psql, PsqlArgs, UserArgs
 from trino import Trino, TrinoArgs, TrinoAutoscalingArgs, TrinoIcebergCatalogArgs
 from flink import Flink, FlinkArgs, FlinkIcebergCatalogArgs, FlinkJobArgs
 from producer import Producer, ProducerArgs
+from spark import Spark, SparkArgs
 from secrets import LakehouseSecrets, SecretArgs
 from service_accounts import PolicyRuleArgs, ServiceAccountArgs, ServiceAccounts, ServiceAccountsArgs
 
@@ -157,9 +158,10 @@ minio = Minio(
 minio.create_buckets(
     f'bucket-{project_name}-{env}-',
     [
-        BucketArgs(name='bronze', versioning=True),   # Raw data
-        BucketArgs(name='silver', versioning=True),   # Cleaned data
-        BucketArgs(name='gold', versioning=True),     # Aggregated data
+        BucketArgs(name='bronze', versioning=True),      # Raw data
+        BucketArgs(name='silver', versioning=True),      # Cleaned data
+        BucketArgs(name='gold', versioning=True),        # Aggregated data
+        BucketArgs(name='spark-logs', versioning=False), # Spark event logs for History Server
     ],
 )
 
@@ -251,6 +253,20 @@ polaris_provisioner_sa = sas.provision(
         name='polaris-principal-provisioner',
         rules=[
             PolicyRuleArgs(resources=['secrets'], verbs=['get', 'create']),
+        ],
+    ),
+)
+
+# SA for Spark driver/executor pods — needs pod/service/configmap CRUD
+spark_sa = sas.provision(
+    f'spark-{project_name}-{env}',
+    ServiceAccountArgs(
+        name='spark',
+        rules=[
+            PolicyRuleArgs(
+                resources=['pods', 'services', 'configmaps'],
+                verbs=['create', 'get', 'list', 'watch', 'delete', 'patch', 'update'],
+            ),
         ],
     ),
 )
@@ -563,24 +579,6 @@ trino.create_catalogs(
     ],
 )
 
-# KEDA ScaledObject: scale Trino workers based on CPU and memory utilization
-# keda.create_scaled_object(
-#     f'scaledobject-{project_name}-{env}-trino',
-#     ScaledObjectArgs(
-#         name='trino-worker-scaler',
-#         target_name=f'{trino_name}-worker',
-#         target_kind='Deployment',
-#         min_replica_count=1,
-#         max_replica_count=5,
-#         triggers=[
-#             TriggerArgs(type='cpu',    metadata={'type': 'Utilization', 'value': '70'}),
-#             TriggerArgs(type='memory', metadata={'type': 'Utilization', 'value': '80'}),
-#         ],
-#     ),
-#     opts=pulumi.ResourceOptions(depends_on=[trino])
-# )
-
-
 # =============================================================================
 # PRODUCER - KAFKA EVENT PRODUCER
 # =============================================================================
@@ -598,6 +596,28 @@ producer = Producer(
         ingress_class_name='nginx',
     ),
     opts=pulumi.ResourceOptions(depends_on=[ns, ingress_nginx, kafka]),
+)
+
+
+# =============================================================================
+# APACHE SPARK - BATCH PROCESSING
+# =============================================================================
+
+spark_name = f'spark-{project_name}-{env}'
+spark = Spark(
+    spark_name,
+    SparkArgs(
+        namespace=ns.metadata.name,
+        release_name=spark_name,
+        service_account_name=spark_sa.metadata.name,
+        s3_endpoint=minio.endpoint,
+        s3_access_key=credentials['minio']['user'],
+        s3_secret_key=credentials['minio']['password'],
+        ingress_enabled=True,
+        ingress_domain=domain,
+        ingress_class_name='nginx',
+    ),
+    opts=pulumi.ResourceOptions(depends_on=[ns, ingress_nginx, minio, spark_sa, polaris_principals]),
 )
 
 
@@ -685,6 +705,10 @@ pulumi.export('keda_namespace', keda.namespace)
 
 # Producer
 pulumi.export('producer_url', producer.url)
+
+# Spark
+pulumi.export('spark_namespace', spark.namespace)
+pulumi.export('spark_history_server_url', spark.history_server_url)
 
 # Flink
 pulumi.export('flink_namespace', flink.namespace)

@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict
 
+import json
 import pulumi
 import pulumi_docker as docker
 from pulumi import Input, Output
@@ -12,6 +13,7 @@ from pulumi_kubernetes.core.v1 import Service
 from pulumi_kubernetes.networking.v1 import Ingress
 
 BUILD_CONTEXT = str(Path(__file__).parent / 'app')
+CONFIG_DIR = Path(__file__).parent.parent / 'config'
 
 
 @dataclass
@@ -118,6 +120,13 @@ class Producer(pulumi.ComponentResource):
 
         if args.ingress_enabled and args.ingress_domain:
             host = f'producer.{args.ingress_domain}'
+
+            ingress_spec = json.loads((CONFIG_DIR / 'resources/ingress_spec.json').read_text())
+            ingress_spec['ingressClassName'] = args.ingress_class_name
+            ingress_spec['rules'][0]['host'] = host
+            ingress_spec['rules'][0]['http']['paths'][0]['backend']['service']['name'] = name
+            ingress_spec['rules'][0]['http']['paths'][0]['backend']['service']['port']['number'] = args.port
+
             Ingress(
                 f'{name}-ingress',
                 metadata={
@@ -125,24 +134,7 @@ class Producer(pulumi.ComponentResource):
                     'name': f'{name}-ingress',
                     'annotations': {'kubernetes.io/ingress.class': args.ingress_class_name},
                 },
-                spec={
-                    'ingressClassName': args.ingress_class_name,
-                    'rules': [{
-                        'host': host,
-                        'http': {
-                            'paths': [{
-                                'path': '/',
-                                'pathType': 'Prefix',
-                                'backend': {
-                                    'service': {
-                                        'name': name,
-                                        'port': {'number': args.port},
-                                    },
-                                },
-                            }],
-                        },
-                    }],
-                },
+                spec=ingress_spec,
                 opts=pulumi.ResourceOptions(parent=self),
             )
             self.url = Output.from_input(f'http://{host}')

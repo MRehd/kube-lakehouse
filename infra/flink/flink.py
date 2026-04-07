@@ -238,7 +238,7 @@ class Flink(pulumi.ComponentResource):
             all_inputs[f'c{i}_s3sec']    = cat.s3_secret_key
 
         def build_spec(resolved: dict) -> dict:
-            spec = json.loads((CONFIG_DIR / 'flink/flink_deployment_spec.json').read_text())
+            spec = json.loads((CONFIG_DIR / 'resources/flink_deployment_spec.json').read_text())
 
             # Top-level overrides
             spec['flinkVersion'] = args.flink_version

@@ -206,47 +206,24 @@ class Minio(pulumi.ComponentResource):
         if args.ingress_annotations:
             annotations.update(args.ingress_annotations)
 
+        spec = json.loads((CONFIG_DIR / 'resources/ingress_spec.json').read_text())
+        spec['ingressClassName'] = args.ingress_class_name
+
+        api_rule = spec['rules'][0]
+        api_rule['host'] = self.api_host
+        api_rule['http']['paths'][0]['backend']['service']['name'] = self._release_name
+        api_rule['http']['paths'][0]['backend']['service']['port']['number'] = args.api_port
+
+        console_rule = json.loads(json.dumps(api_rule))
+        console_rule['host'] = self.console_host
+        console_rule['http']['paths'][0]['backend']['service']['name'] = f'{self._release_name}-console'
+        console_rule['http']['paths'][0]['backend']['service']['port']['number'] = args.console_port
+        spec['rules'].append(console_rule)
+
         return Ingress(
             f'{self._release_name}-ingress',
-            metadata={
-                'namespace': self._namespace,
-                'annotations': annotations,
-            },
-            spec={
-                'ingressClassName': args.ingress_class_name,
-                'rules': [
-                    {
-                        'host': self.api_host,
-                        'http': {
-                            'paths': [{
-                                'path': '/',
-                                'pathType': 'Prefix',
-                                'backend': {
-                                    'service': {
-                                        'name': self._release_name,
-                                        'port': {'number': args.api_port},
-                                    },
-                                },
-                            }],
-                        },
-                    },
-                    {
-                        'host': self.console_host,
-                        'http': {
-                            'paths': [{
-                                'path': '/',
-                                'pathType': 'Prefix',
-                                'backend': {
-                                    'service': {
-                                        'name': f'{self._release_name}-console',
-                                        'port': {'number': args.console_port},
-                                    },
-                                },
-                            }],
-                        },
-                    },
-                ],
-            },
+            metadata={'namespace': self._namespace, 'annotations': annotations},
+            spec=spec,
             opts=pulumi.ResourceOptions(parent=self, depends_on=[self.chart]),
         )
 
