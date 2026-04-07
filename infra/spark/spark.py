@@ -40,8 +40,8 @@ class SparkArgs:
     When using k8s://, executor pods are created in the same namespace using the same image and
     service account. The spark ServiceAccount must have pod/service/configmap CRUD (already set).
     '''
-    executor_instances: int = 1
-    '''Number of executor pods when connect_master uses k8s://. Ignored for local[*].'''
+    executor_instances: int = 4
+    '''Max executor pods for dynamic allocation when connect_master uses k8s://. Ignored for local[*].'''
 
     # History Server
     event_log_bucket: str = 'spark-logs'
@@ -130,7 +130,12 @@ class Spark(pulumi.ComponentResource):
             '--conf', f'spark.kubernetes.namespace={v["ns"]}',
             '--conf', f'spark.kubernetes.authenticate.driver.serviceAccountName={v["sa"]}',
             '--conf', f'spark.kubernetes.container.image={image}',
-            '--conf', f'spark.executor.instances={args.executor_instances}',
+            # Dynamic allocation — executors created on demand, released when idle
+            '--conf', 'spark.dynamicAllocation.enabled=true',
+            '--conf', 'spark.dynamicAllocation.shuffleTracking.enabled=true',
+            '--conf', f'spark.dynamicAllocation.minExecutors=0',
+            '--conf', f'spark.dynamicAllocation.maxExecutors={args.executor_instances}',
+            '--conf', 'spark.dynamicAllocation.executorIdleTimeout=60s',
         ])
 
         cs_spec = json.loads((CONFIG_DIR / 'resources/spark_connect_spec.json').read_text())
