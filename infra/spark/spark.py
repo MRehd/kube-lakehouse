@@ -114,6 +114,7 @@ class Spark(pulumi.ComponentResource):
             key=args.s3_access_key,
             sec=args.s3_secret_key,
             ns=self._namespace,
+            sa=args.service_account_name,
         ).apply(lambda v: [
             '--class', 'org.apache.spark.sql.connect.service.SparkConnectServer',
             '--master', args.connect_master,
@@ -127,7 +128,7 @@ class Spark(pulumi.ComponentResource):
             '--conf', f'spark.connect.grpc.binding.port={CONNECT_SERVER_PORT}',
             # K8s executor scheduling — only meaningful when connect_master is k8s://
             '--conf', f'spark.kubernetes.namespace={v["ns"]}',
-            '--conf', f'spark.kubernetes.authenticate.driver.serviceAccountName={args.service_account_name}',
+            '--conf', f'spark.kubernetes.authenticate.driver.serviceAccountName={v["sa"]}',
             '--conf', f'spark.kubernetes.container.image={image}',
             '--conf', f'spark.executor.instances={args.executor_instances}',
         ])
