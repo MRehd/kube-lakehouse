@@ -151,7 +151,7 @@ class Airflow(pulumi.ComponentResource):
             self.ui_url = Output.from_input(f'http://airflow.{args.ingress_domain}')
         else:
             self.ui_url = Output.concat(
-                'http://', release, '-webserver.', self._namespace,
+                'http://', release, '-api-server.', self._namespace,
                 '.svc.cluster.local:8080',
             )
 
@@ -222,10 +222,10 @@ class Airflow(pulumi.ComponentResource):
                 {'secretRef': {'name': s}} for s in args.env_secrets
             ]
 
-        # Ingress
+        # Ingress — Airflow 3.x uses apiServer instead of web
         if args.ingress_enabled and args.ingress_domain:
             values['ingress'] = {
-                'web': {
+                'apiServer': {
                     'enabled': True,
                     'ingressClassName': args.ingress_class_name,
                     'hosts': [{'name': f'airflow.{args.ingress_domain}'}],

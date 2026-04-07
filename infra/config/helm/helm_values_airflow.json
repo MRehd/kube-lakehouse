@@ -32,6 +32,6 @@
     "persistence": {"enabled": false}
   },
   "ingress": {
-    "web": {"enabled": false}
+    "apiServer": {"enabled": false}
   }
 }
