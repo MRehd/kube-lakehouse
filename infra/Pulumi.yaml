@@ -15,21 +15,37 @@ config:
     description: Kubernetes node hostname for pod scheduling
   k8lh:minio_root_user:
     description: MinIO root username
+    value: minioadmin
   k8lh:minio_root_password:
     description: MinIO root password
     secret: true
   k8lh:postgres_admin_user:
     description: PostgreSQL admin username
+    value: postgres
   k8lh:postgres_admin_password:
     description: PostgreSQL admin password
     secret: true
   k8lh:airflow_postgres_user:
     description: PostgreSQL Airflow username
+    value: airflow
   k8lh:airflow_postgres_password:
     description: PostgreSQL Airflow password
     secret: true
+  k8lh:airflow_fernet_key:
+    description: Fernet key for Airflow connection/variable encryption
+    secret: true
+  k8lh:airflow_webserver_secret_key:
+    description: Flask session signing key for the Airflow webserver
+    secret: true
+  k8lh:airflow_git_repo:
+    value: https://github.com/MRehd/kube-lakehouse.git
+    description: HTTPS URL of the git repo containing Airflow DAGs (e.g. https://github.com/org/repo.git)
+  k8lh:airflow_git_token:
+    description: GitHub Personal Access Token for git-sync to pull from the DAGs repo
+    secret: true
   k8lh:polaris_postgres_user:
     description: PostgreSQL Polaris username
+    value: polaris
   k8lh:polaris_postgres_password:
     description: PostgreSQL Polaris password
     secret: true

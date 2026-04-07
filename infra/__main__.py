@@ -37,6 +37,7 @@ from trino import Trino, TrinoArgs, TrinoAutoscalingArgs, TrinoIcebergCatalogArg
 from flink import Flink, FlinkArgs, FlinkIcebergCatalogArgs, FlinkJobArgs
 from producer import Producer, ProducerArgs
 from spark import Spark, SparkArgs
+from airflow import Airflow, AirflowArgs, AirflowConnectionArgs
 from secrets import LakehouseSecrets, SecretArgs
 from service_accounts import PolicyRuleArgs, ServiceAccountArgs, ServiceAccounts, ServiceAccountsArgs
 
@@ -67,8 +68,14 @@ credentials = {
     'airflow': {
         'user': config.require('airflow_postgres_user'),
         'password': config.require_secret('airflow_postgres_password'),
+        'fernet_key': config.require_secret('airflow_fernet_key'),
+        'webserver_secret_key': config.require_secret('airflow_webserver_secret_key'),
+        'git_token': config.require_secret('airflow_git_token'),
     },
 }
+
+airflow_git_repo   = config.require('airflow_git_repo')
+airflow_git_branch = config.require('airflow_git_branch')
 
 # Polaris credentials are handled separately because the secret
 # requires a JDBC URL that depends on the PostgreSQL host
@@ -623,6 +630,61 @@ spark = Spark(
 
 
 # =============================================================================
+# APACHE AIRFLOW - WORKFLOW ORCHESTRATION
+# =============================================================================
+
+airflow_metadata_secret = LakehouseSecrets(
+    f'secrets-airflow-meta-{project_name}-{env}',
+    ns.metadata.name,
+    [
+        SecretArgs(
+            name='airflow-metadata',
+            data={
+                'connection': pulumi.Output.all(
+                    user=credentials['airflow']['user'],
+                    pw=credentials['airflow']['password'],
+                    host=psql.host,
+                ).apply(lambda v: f"postgresql+psycopg2://{v['user']}:{v['pw']}@{v['host']}:5432/{airflow_db}"),
+            },
+        ),
+        SecretArgs(name='airflow-fernet',    data={'fernet-key':           credentials['airflow']['fernet_key']}),
+        SecretArgs(name='airflow-webserver', data={'webserver-secret-key': credentials['airflow']['webserver_secret_key']}),
+        SecretArgs(name='airflow-git-credentials', data={
+            'GITSYNC_USERNAME': 'x-token',
+            'GITSYNC_PASSWORD': credentials['airflow']['git_token'],
+        }),
+    ],
+    opts=pulumi.ResourceOptions(depends_on=[ns, psql]),
+)
+
+airflow_name = f'airflow-{project_name}-{env}'
+airflow = Airflow(
+    airflow_name,
+    AirflowArgs(
+        namespace=ns.metadata.name,
+        release_name=airflow_name,
+        db_metadata_secret='airflow-metadata',
+        fernet_key_secret='airflow-fernet',
+        webserver_secret_key_secret='airflow-webserver',
+        git_repo=airflow_git_repo,
+        git_branch=airflow_git_branch,
+        git_credentials_secret='airflow-git-credentials',
+        git_subpath='infra/airflow/dags',
+        ingress_enabled=True,
+        ingress_domain=domain,
+        ingress_class_name='nginx',
+        connections=[
+            AirflowConnectionArgs(
+                conn_id='spark_default',
+                uri=spark.connect_server_url,
+            ),
+        ],
+    ),
+    opts=pulumi.ResourceOptions(depends_on=[ns, ingress_nginx, db['airflow']['instance'], airflow_metadata_secret, spark]),
+)
+
+
+# =============================================================================
 # APACHE FLINK - STREAM PROCESSING
 # =============================================================================
 
@@ -706,6 +768,9 @@ pulumi.export('keda_namespace', keda.namespace)
 
 # Producer
 pulumi.export('producer_url', producer.url)
+
+# Airflow
+pulumi.export('airflow_url', airflow.ui_url)
 
 # Spark
 pulumi.export('spark_namespace', spark.namespace)

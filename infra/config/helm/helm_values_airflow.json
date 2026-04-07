@@ -1,0 +1,37 @@
+{
+  "executor": "KubernetesExecutor",
+  "postgresql": {"enabled": false},
+  "scheduler": {
+    "replicas": 1,
+    "resources": {
+      "requests": {"cpu": "250m", "memory": "512Mi"},
+      "limits":   {"cpu": "500m", "memory": "1Gi"}
+    }
+  },
+  "webserver": {
+    "replicas": 1,
+    "resources": {
+      "requests": {"cpu": "250m", "memory": "512Mi"},
+      "limits":   {"cpu": "500m", "memory": "1Gi"}
+    }
+  },
+  "workers": {
+    "resources": {
+      "requests": {"cpu": "500m", "memory": "1Gi"},
+      "limits":   {"cpu": "1",    "memory": "2Gi"}
+    }
+  },
+  "config": {
+    "core": {
+      "parallelism": "32",
+      "max_active_tasks_per_dag": "16",
+      "max_active_runs_per_dag": "4"
+    }
+  },
+  "logs": {
+    "persistence": {"enabled": false}
+  },
+  "ingress": {
+    "web": {"enabled": false}
+  }
+}
