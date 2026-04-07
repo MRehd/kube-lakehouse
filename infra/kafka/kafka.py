@@ -1,4 +1,22 @@
-'''Reusable Apache Kafka component for Kubernetes using Bitnami Helm chart.'''
+'''
+Apache Kafka on Kubernetes — Bitnami Helm chart (KRaft mode, no ZooKeeper).
+
+Deploys a Kafka cluster in KRaft mode with optional autoscaling and
+topic provisioning via Helm values.
+
+Example:
+    kafka = Kafka('kafka', KafkaArgs(
+        namespace=ns.metadata.name,
+        replicas=3,
+        persistence_size='20Gi',
+        topics=[
+            TopicArgs(name='btc-prices', partitions=6, replicas=3),
+        ],
+    ))
+
+    # Use kafka.bootstrap_servers as Input[str] in other components:
+    #   kafka_ui bootstrap_servers, KEDA KafkaTrigger, Airflow env vars, etc.
+'''
 
 import json
 from dataclasses import dataclass, field
@@ -9,54 +27,53 @@ import pulumi
 from pulumi import Input, Output
 from pulumi_kubernetes.helm.v3 import Chart, ChartOpts
 
-# Config directory for templates
 CONFIG_DIR = Path(__file__).parent.parent / 'config'
 
 
 @dataclass
 class TopicArgs:
-    '''Configuration for a Kafka topic.'''
+    '''Configuration for a Kafka topic provisioned at deploy time.'''
 
     name: str
-    '''Name of the topic to create.'''
+    '''Topic name.'''
 
     partitions: int = 3
-    '''Number of partitions for the topic.'''
+    '''Number of partitions.'''
 
     replicas: int = 1
-    '''Replication factor for the topic.'''
+    '''Replication factor. Should not exceed the number of brokers.'''
 
     retention_ms: Optional[int] = None
-    '''Message retention time in milliseconds.'''
+    '''Message retention in milliseconds. None uses the broker default.'''
 
     retention_bytes: Optional[int] = None
-    '''Maximum size of the topic in bytes before oldest messages are deleted.'''
+    '''Max topic size in bytes before oldest messages are deleted. None = unlimited.'''
 
     cleanup_policy: str = 'delete'
-    '''Cleanup policy: 'delete', 'compact', or 'compact,delete'.'''
+    '''Cleanup policy: "delete", "compact", or "compact,delete".'''
 
     min_insync_replicas: int = 1
-    '''Minimum number of in-sync replicas required for writes.'''
+    '''Minimum in-sync replicas required for writes to succeed.'''
 
 
 @dataclass
 class AutoscalingArgs:
-    '''Configuration for Kafka broker autoscaling.'''
+    '''HPA configuration for Kafka broker pods.'''
 
     enabled: bool = True
-    '''Enable autoscaling for Kafka brokers.'''
+    '''Enable the Horizontal Pod Autoscaler.'''
 
     min_replicas: int = 1
-    '''Minimum number of broker replicas.'''
+    '''Minimum broker replicas.'''
 
     max_replicas: int = 5
-    '''Maximum number of broker replicas.'''
+    '''Maximum broker replicas.'''
 
     target_cpu_utilization: int = 70
-    '''Target CPU utilization percentage for scaling.'''
+    '''Target CPU utilization percentage for scale-up.'''
 
     target_memory_utilization: Optional[int] = None
-    '''Target memory utilization percentage for scaling (optional).'''
+    '''Target memory utilization percentage. None omits this metric.'''
 
 
 @dataclass
@@ -66,35 +83,41 @@ class KafkaArgs:
     namespace: Input[str] = 'kafka'
     '''Kubernetes namespace to deploy Kafka into (must already exist).'''
 
+    release_name: Optional[str] = None
+    '''Helm release name — controls K8s resource names. Defaults to the Pulumi resource name.'''
+
+    chart_version: str = '32.4.3'
+    '''Version of the Bitnami Kafka Helm chart.'''
+
     replicas: int = 3
     '''Number of Kafka broker replicas (combined controller+broker in KRaft mode).'''
 
     listener_port: int = 9092
-    '''Internal listener port for Kafka brokers.'''
+    '''Internal Kafka listener port.'''
 
     persistence_enabled: bool = True
-    '''Enable persistent storage for Kafka data.'''
+    '''Mount a PersistentVolumeClaim per broker for durable log storage.'''
 
     persistence_size: str = '10Gi'
-    '''Size of the persistent volume for each Kafka broker.'''
+    '''PVC size per broker.'''
 
     storage_class: Optional[str] = None
-    '''Kubernetes storage class to use for persistence.'''
+    '''StorageClass for broker PVCs. None uses the cluster default.'''
 
     resources: dict = field(default_factory=lambda: {
-        'requests': {'memory': '1Gi', 'cpu': '500m'},
-        'limits': {'memory': '2Gi', 'cpu': '1000m'},
+        'requests': {'memory': '1Gi',  'cpu': '500m'},
+        'limits':   {'memory': '2Gi',  'cpu': '1000m'},
     })
-    '''Resource requests and limits for Kafka broker pods.'''
+    '''CPU and memory requests/limits for broker pods.'''
 
     heap_opts: str = '-Xms512m -Xmx1g'
-    '''JVM heap options for Kafka brokers.'''
+    '''JVM heap options for broker pods.'''
 
     log_retention_hours: int = 168
-    '''Default log retention time in hours (default: 7 days).'''
+    '''Log retention duration in hours (default: 7 days).'''
 
     log_retention_bytes: int = -1
-    '''Default log retention size in bytes (-1 for unlimited).'''
+    '''Max log size in bytes per partition (-1 = unlimited).'''
 
     num_partitions: int = 3
     '''Default number of partitions for auto-created topics.'''
@@ -103,59 +126,40 @@ class KafkaArgs:
     '''Default replication factor for auto-created topics.'''
 
     auto_create_topics: bool = True
-    '''Allow automatic topic creation.'''
+    '''Allow Kafka to create topics automatically on first use.'''
 
     cluster_domain: str = 'cluster.local'
     '''Kubernetes cluster domain suffix.'''
 
-    release_name: Optional[str] = None
-    '''Helm release name (controls K8s resource names). If not set, uses the Pulumi resource name.'''
-
-    chart_version: str = '32.4.3'
-    '''Version of the Bitnami Kafka Helm chart.'''
-
     autoscaling: AutoscalingArgs = field(default_factory=AutoscalingArgs)
-    '''Autoscaling configuration for Kafka brokers.'''
-
-    extra_config: str = ''
-    '''Additional Kafka broker configuration (as string, one per line).'''
+    '''HPA configuration for broker pods.'''
 
     topics: List[TopicArgs] = field(default_factory=list)
-    '''Topics to create on startup via provisioning.'''
+    '''Topics to create at deploy time via Helm provisioning.'''
+
+    extra_config: str = ''
+    '''Additional broker configuration lines (appended to server.properties).'''
 
 
 class Kafka(pulumi.ComponentResource):
     '''
-    A reusable Pulumi component for deploying Apache Kafka to Kubernetes using Bitnami.
+    Deploys Apache Kafka to Kubernetes using the Bitnami Helm chart in KRaft mode.
 
-    Bitnami Kafka runs in KRaft mode (no ZooKeeper required) and provides a
-    simple, production-ready Kafka deployment.
+    KRaft mode runs without ZooKeeper — each broker also acts as a controller.
+    Spurious updates to the KRaft secret and StatefulSet annotations are ignored
+    via resource transforms to prevent unnecessary pod restarts.
 
-    Features:
-        - KRaft mode (no ZooKeeper required)
-        - Built-in autoscaling support
-        - Persistent storage with configurable retention
-        - Topic provisioning via Helm values
+    Outputs:
+        namespace          — Kubernetes namespace
+        bootstrap_servers  — Full internal bootstrap address (host:port)
+        bootstrap_endpoint — Short form (release:port) for same-namespace clients
 
     Example:
-        ```python
-        from kafka import Kafka, KafkaArgs, AutoscalingArgs, TopicArgs
-
-        kafka = Kafka('my-kafka', KafkaArgs(
-            namespace='data',
+        kafka = Kafka('kafka', KafkaArgs(
+            namespace=ns.metadata.name,
             replicas=3,
-            persistence_size='50Gi',
-            autoscaling=AutoscalingArgs(
-                enabled=True,
-                min_replicas=3,
-                max_replicas=10,
-                target_cpu_utilization=70,
-            ),
-            topics=[
-                TopicArgs(name='events', partitions=6, replicas=3),
-            ],
+            topics=[TopicArgs(name='events', partitions=6, replicas=3)],
         ))
-        ```
     '''
 
     def __init__(
@@ -167,84 +171,48 @@ class Kafka(pulumi.ComponentResource):
         super().__init__('k8lh:kafka:Kafka', name, {}, opts)
 
         args = args or KafkaArgs()
-        self._args = args
-        self._name = name
-        self._release_name = args.release_name or name
-
-        # Resolve Input fields upfront
+        release_name = args.release_name or name
         self._namespace = Output.from_input(args.namespace)
 
-        # Deploy Kafka cluster via Helm
-        self.chart = self._deploy_kafka(args)
-
-        # Export useful outputs
-        self.namespace = self._namespace
-        self.bootstrap_servers = pulumi.Output.concat(
-            self._release_name, '.', self._namespace,
-            '.svc.', args.cluster_domain, ':', str(args.listener_port)
-        )
-        self.bootstrap_endpoint = pulumi.Output.concat(
-            self._release_name, ':', str(args.listener_port)
-        )
-
-        self.register_outputs({
-            'namespace': self.namespace,
-            'bootstrap_servers': self.bootstrap_servers,
-            'bootstrap_endpoint': self.bootstrap_endpoint,
-        })
-
-    def _deploy_kafka(self, args: KafkaArgs) -> Chart:
-        '''Deploy Kafka using Bitnami Helm chart.'''
+        # ── Helm values ───────────────────────────────────────────────────────
         values = json.loads((CONFIG_DIR / 'helm/helm_values_kafka.json').read_text())
 
-        # Configure release name
-        values['fullnameOverride'] = self._release_name
+        values['fullnameOverride']                          = release_name
+        values['controller']['replicaCount']                = args.replicas
+        values['controller']['persistence']['enabled']      = args.persistence_enabled
+        values['controller']['persistence']['size']         = args.persistence_size
+        values['controller']['resources']                   = args.resources
+        values['controller']['heapOpts']                    = args.heap_opts
+        values['listeners']['client']['containerPort']      = args.listener_port
+        values['log']['retentionHours']                     = args.log_retention_hours
+        values['log']['retentionBytes']                     = args.log_retention_bytes
+        values['defaultReplicationFactor']                  = args.default_replication_factor
+        values['numPartitions']                             = args.num_partitions
+        values['autoCreateTopicsEnable']                    = args.auto_create_topics
 
-        # Configure controller replicas (combined controller+broker in KRaft mode)
-        values['controller']['replicaCount'] = args.replicas
-        values['controller']['persistence']['enabled'] = args.persistence_enabled
-        values['controller']['persistence']['size'] = args.persistence_size
         if args.storage_class:
             values['controller']['persistence']['storageClass'] = args.storage_class
-        values['controller']['resources'] = args.resources
-        values['controller']['heapOpts'] = args.heap_opts
-
-        # Configure listeners
-        values['listeners']['client']['containerPort'] = args.listener_port
-
-        # Configure log retention
-        values['log']['retentionHours'] = args.log_retention_hours
-        values['log']['retentionBytes'] = args.log_retention_bytes
-
-        # Configure topic defaults
-        values['defaultReplicationFactor'] = args.default_replication_factor
-        values['numPartitions'] = args.num_partitions
-        values['autoCreateTopicsEnable'] = args.auto_create_topics
-
-        # Additional config
         if args.extra_config:
             values['extraConfig'] = args.extra_config
 
-        # Configure autoscaling
         if args.autoscaling.enabled:
-            values['autoscaling']['enabled'] = True
-            values['autoscaling']['minReplicas'] = args.autoscaling.min_replicas
-            values['autoscaling']['maxReplicas'] = args.autoscaling.max_replicas
-            values['autoscaling']['targetCPU'] = args.autoscaling.target_cpu_utilization
+            values['autoscaling']['enabled']     = True
+            values['autoscaling']['minReplicas']  = args.autoscaling.min_replicas
+            values['autoscaling']['maxReplicas']  = args.autoscaling.max_replicas
+            values['autoscaling']['targetCPU']    = args.autoscaling.target_cpu_utilization
             if args.autoscaling.target_memory_utilization:
                 values['autoscaling']['targetMemory'] = args.autoscaling.target_memory_utilization
 
-        # Configure topic provisioning
         if args.topics:
             values['provisioning']['enabled'] = True
-            values['provisioning']['topics'] = []
+            values['provisioning']['topics']  = []
             for topic in args.topics:
                 topic_config = {
-                    'name': topic.name,
-                    'partitions': topic.partitions,
+                    'name':              topic.name,
+                    'partitions':        topic.partitions,
                     'replicationFactor': topic.replicas,
                     'config': {
-                        'cleanup.policy': topic.cleanup_policy,
+                        'cleanup.policy':    topic.cleanup_policy,
                         'min.insync.replicas': topic.min_insync_replicas,
                     },
                 }
@@ -254,30 +222,43 @@ class Kafka(pulumi.ComponentResource):
                     topic_config['config']['retention.bytes'] = topic.retention_bytes
                 values['provisioning']['topics'].append(topic_config)
 
-        def ignore_kraft_changes(args: pulumi.ResourceTransformArgs) -> pulumi.ResourceTransformResult:
-            # The KRaft secret data and its checksum annotation in the StatefulSet pod
-            # template are regenerated randomly on every chart render. Ignoring them
-            # prevents spurious updates and avoids replacing the secret (which would
-            # break existing Kafka storage).
-            if args.type_ == 'kubernetes:core/v1:Secret' and 'kraft' in (args.name or ''):
-                args.opts.ignore_changes = ['data']
-            if args.type_ == 'kubernetes:apps/v1:StatefulSet' and 'controller' in (args.name or ''):
-                args.opts.ignore_changes = [
+        # ── Chart ─────────────────────────────────────────────────────────────
+        # The KRaft secret data and the StatefulSet's checksum annotation are
+        # regenerated randomly on every chart render. Ignore them to prevent
+        # spurious updates that would replace the secret and break existing brokers.
+        def ignore_kraft_changes(t: pulumi.ResourceTransformArgs) -> pulumi.ResourceTransformResult:
+            if t.type_ == 'kubernetes:core/v1:Secret' and 'kraft' in (t.name or ''):
+                t.opts.ignore_changes = ['data']
+            if t.type_ == 'kubernetes:apps/v1:StatefulSet' and 'controller' in (t.name or ''):
+                t.opts.ignore_changes = [
                     'spec.template.metadata.annotations',
                     'spec.volumeClaimTemplates',
                 ]
-            return pulumi.ResourceTransformResult(props=args.props, opts=args.opts)
+            return pulumi.ResourceTransformResult(props=t.props, opts=t.opts)
 
-        return Chart(
-            f'{self._name}-kafka',
+        self.chart = Chart(
+            f'{name}-kafka',
             ChartOpts(
                 chart='oci://registry-1.docker.io/bitnamicharts/kafka',
                 version=args.chart_version,
                 namespace=self._namespace,
                 values=values,
             ),
-            opts=pulumi.ResourceOptions(
-                parent=self,
-                transforms=[ignore_kraft_changes],
-            ),
+            opts=pulumi.ResourceOptions(parent=self, transforms=[ignore_kraft_changes]),
         )
+
+        # ── Outputs ───────────────────────────────────────────────────────────
+        self.namespace = self._namespace
+        self.bootstrap_servers = Output.concat(
+            release_name, '.', self._namespace,
+            '.svc.', args.cluster_domain, ':', str(args.listener_port),
+        )
+        self.bootstrap_endpoint = Output.concat(
+            release_name, ':', str(args.listener_port),
+        )
+
+        self.register_outputs({
+            'namespace':          self.namespace,
+            'bootstrap_servers':  self.bootstrap_servers,
+            'bootstrap_endpoint': self.bootstrap_endpoint,
+        })

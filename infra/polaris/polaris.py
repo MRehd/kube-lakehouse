@@ -1,4 +1,45 @@
-'''Reusable Apache Polaris component for Kubernetes using Helm charts.'''
+'''
+Apache Polaris on Kubernetes — official Helm chart.
+
+Deploys Polaris (Iceberg REST catalog) and exposes methods to bootstrap the
+database schema, create catalogs, create principal roles, and create principals
+(service accounts) — all via Kubernetes Jobs that call the Polaris REST API.
+
+Dependency order:
+    Polaris chart → create_bootstrap → create_catalogs
+                                     → create_roles → create_principals
+
+Example:
+    polaris = Polaris('polaris', PolarisArgs(
+        namespace=ns.metadata.name,
+        persistence_type='relational-jdbc',
+        persistence_secret_name='polaris-db',
+        ingress_enabled=True,
+        ingress_domain='k8lh.local',
+    ))
+
+    bootstrap = polaris.create_bootstrap(
+        'bootstrap',
+        root_client_id='root',
+        root_client_secret=config.require_secret('polaris_root_secret'),
+    )
+
+    catalogs = polaris.create_catalogs('catalogs', [
+        CatalogArgs(name='bronze', s3_endpoint=minio.endpoint, s3_bucket='bronze',
+                    s3_access_key='minioadmin', s3_secret_key=minio_password),
+    ], opts=pulumi.ResourceOptions(depends_on=[bootstrap]))
+
+    roles = polaris.create_roles('roles', [
+        RoleArgs(name='data_engineer', catalog_grants=[
+            CatalogGrantArgs(catalog='bronze', role='catalog_admin'),
+        ]),
+    ], opts=pulumi.ResourceOptions(depends_on=[catalogs]))
+
+    polaris.create_principals('principals', [
+        PrincipalArgs(name='trino', roles=['data_engineer'],
+                      credentials_secret_name='polaris-trino-credentials'),
+    ], opts=pulumi.ResourceOptions(depends_on=[roles]))
+'''
 
 import json
 from dataclasses import dataclass, field
@@ -11,8 +52,18 @@ from pulumi_kubernetes.batch.v1 import Job
 from pulumi_kubernetes.helm.v3 import Chart, ChartOpts, FetchOpts
 from pulumi_kubernetes.networking.v1 import Ingress
 
-# Config directory for templates
 CONFIG_DIR = Path(__file__).parent.parent / 'config'
+
+
+def _deep_merge(base: dict, override: dict) -> dict:
+    '''Recursively merge override into base, with override taking precedence.'''
+    result = base.copy()
+    for key, value in override.items():
+        if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+            result[key] = _deep_merge(result[key], value)
+        else:
+            result[key] = value
+    return result
 
 
 @dataclass
@@ -20,25 +71,25 @@ class CatalogArgs:
     '''Configuration for an Apache Polaris catalog backed by S3/MinIO storage.'''
 
     name: str
-    '''Name of the catalog to create.'''
+    '''Catalog name in Polaris (also used as the Iceberg warehouse name).'''
 
     s3_endpoint: Input[str]
-    '''S3/MinIO endpoint URL. Can be a plain string or Pulumi Output.'''
+    '''S3/MinIO endpoint URL. Accepts a Pulumi Output (e.g. minio.endpoint).'''
 
     s3_bucket: str
-    '''S3/MinIO bucket name for the catalog's warehouse location.'''
+    '''S3/MinIO bucket backing this catalog's warehouse.'''
 
     s3_access_key: Input[str]
-    '''S3/MinIO access key ID. Can be a plain string or Pulumi Output (secret).'''
+    '''S3 access key ID. Accepts a Pulumi Output.'''
 
     s3_secret_key: Input[str]
-    '''S3/MinIO secret access key. Can be a plain string or Pulumi Output (secret).'''
+    '''S3 secret access key. Accepts a Pulumi secret Output.'''
 
     s3_path_style_access: bool = True
-    '''Use path-style access (required for MinIO).'''
+    '''Use path-style S3 access (required for MinIO).'''
 
     s3_region: str = 'us-east-1'
-    '''S3 region (can be any value for MinIO).'''
+    '''S3 region (any value works for MinIO).'''
 
     realm: str = 'POLARIS'
     '''Polaris realm to create the catalog in.'''
@@ -47,36 +98,18 @@ class CatalogArgs:
     '''Catalog type: INTERNAL or EXTERNAL.'''
 
     default_base_location: Optional[str] = None
-    '''Default base location for tables. If not set, uses s3://<bucket>/.'''
-
-
-@dataclass
-class PrincipalArgs:
-    '''Configuration for a Polaris principal (service account/user).'''
-
-    name: str
-    '''Name of the principal to create.'''
-
-    credentials_secret_name: str
-    '''
-    Kubernetes Secret name where this principal's OAuth2 credentials will be stored.
-    The secret is created once at principal creation time and never overwritten.
-    The provisioning job pod must run under a ServiceAccount with get/create on Secrets.
-    '''
-
-    roles: List[str] = field(default_factory=list)
-    '''List of principal role names to assign to this principal.'''
+    '''Default warehouse base location. Defaults to s3://<bucket>/.'''
 
 
 @dataclass
 class CatalogGrantArgs:
-    '''Configuration for granting a catalog role to a principal role.'''
+    '''A catalog-role grant assigned to a principal role.'''
 
     catalog: str
     '''Name of the catalog to grant access to.'''
 
     role: str = 'catalog_admin'
-    '''Catalog role to grant (e.g., 'catalog_admin', built-in roles).'''
+    '''Catalog role to grant (e.g. "catalog_admin").'''
 
 
 @dataclass
@@ -87,7 +120,26 @@ class RoleArgs:
     '''Name of the principal role to create.'''
 
     catalog_grants: List[CatalogGrantArgs] = field(default_factory=list)
-    '''List of catalog grants for this role.'''
+    '''Catalog roles to grant to this principal role.'''
+
+
+@dataclass
+class PrincipalArgs:
+    '''Configuration for a Polaris principal (service account / user).'''
+
+    name: str
+    '''Name of the principal to create.'''
+
+    credentials_secret_name: str
+    '''
+    K8s Secret name where this principal's OAuth2 credentials (CLIENT_ID /
+    CLIENT_SECRET) will be stored. Created once at principal creation time and
+    never overwritten. The provisioner job must run under a ServiceAccount
+    with get/create on Secrets.
+    '''
+
+    roles: List[str] = field(default_factory=list)
+    '''Principal role names to assign to this principal.'''
 
 
 @dataclass
@@ -97,11 +149,44 @@ class PolarisArgs:
     namespace: Input[str] = 'polaris'
     '''Kubernetes namespace to deploy Polaris into (must already exist).'''
 
+    release_name: Optional[str] = None
+    '''Helm release name — controls K8s resource names. Defaults to the Pulumi resource name.'''
+
+    chart_version: str = '1.3.0-incubating'
+    '''Version of the Apache Polaris Helm chart.'''
+
+    chart_repo: str = 'https://downloads.apache.org/polaris/helm-chart/'
+    '''Helm chart repository URL.'''
+
+    image_repository: str = 'apache/polaris'
+    '''Docker image repository.'''
+
+    image_tag: str = 'latest'
+    '''Docker image tag.'''
+
+    image_pull_policy: str = 'IfNotPresent'
+    '''Image pull policy: Always, IfNotPresent, or Never.'''
+
+    replica_count: int = 1
+    '''Number of Polaris replicas.'''
+
+    service_type: str = 'LoadBalancer'
+    '''Kubernetes service type: ClusterIP, NodePort, or LoadBalancer.'''
+
+    service_port: int = 8181
+    '''Polaris REST API port.'''
+
+    management_port: int = 8182
+    '''Polaris management port (health checks, metrics).'''
+
+    realms: List[str] = field(default_factory=lambda: ['POLARIS'])
+    '''Valid Polaris realms. First realm is the default for catalog/bootstrap operations.'''
+
     persistence_type: str = 'relational-jdbc'
-    '''Persistence type: 'in-memory' or 'relational-jdbc'.'''
+    '''Persistence backend: "in-memory" or "relational-jdbc".'''
 
     persistence_secret_name: Optional[str] = None
-    '''Name of the Kubernetes secret containing database credentials.'''
+    '''K8s Secret containing database credentials (jdbcUrl, username, password keys).'''
 
     persistence_secret_username_key: str = 'username'
     '''Key in the secret for the database username.'''
@@ -110,103 +195,83 @@ class PolarisArgs:
     '''Key in the secret for the database password.'''
 
     persistence_secret_jdbc_url_key: str = 'jdbcUrl'
-    '''Key in the secret for the JDBC URL.'''
-
-    realms: List[str] = field(default_factory=lambda: ['POLARIS'])
-    '''List of valid realms. The first realm is the default.'''
-
-    replica_count: int = 1
-    '''Number of Polaris replicas to deploy.'''
-
-    service_type: str = 'LoadBalancer'
-    '''Kubernetes service type: ClusterIP, NodePort, or LoadBalancer.'''
-
-    service_port: int = 8181
-    '''Port for the Polaris API service.'''
-
-    management_port: int = 8182
-    '''Port for the Polaris management service (health checks, metrics).'''
-
-    image_repository: str = 'apache/polaris'
-    '''Docker image repository for Polaris.'''
-
-    image_tag: str = 'latest'
-    '''Docker image tag for Polaris.'''
-
-    image_pull_policy: str = 'IfNotPresent'
-    '''Image pull policy: Always, IfNotPresent, or Never.'''
+    '''Key in the secret for the JDBC connection URL.'''
 
     resources: dict = field(default_factory=lambda: {
         'requests': {'memory': '512Mi', 'cpu': '250m'},
-        'limits': {'memory': '1Gi', 'cpu': '500m'},
+        'limits':   {'memory': '1Gi',   'cpu': '500m'},
     })
-    '''Resource requests and limits for Polaris pods.'''
-
-    chart_version: str = '1.3.0-incubating'
-    '''Version of the Polaris Helm chart to deploy.'''
-
-    chart_repo: str = 'https://downloads.apache.org/polaris/helm-chart/'
-    '''Helm chart repository URL.'''
-
-    extra_values: dict = field(default_factory=dict)
-    '''Additional Helm values to pass to the chart.'''
-
-    cluster_domain: str = 'cluster.local'
-    '''Kubernetes cluster domain suffix (usually 'cluster.local').'''
-
-    release_name: Optional[str] = None
-    '''Helm release name (controls K8s resource names). If not set, uses the Pulumi resource name.'''
-
-    ingress_enabled: bool = True
-    '''Enable Ingress for external access.'''
-
-    ingress_domain: Optional[str] = None
-    '''Domain for Ingress (e.g., 'k8lh.local'). Creates polaris.<domain>.'''
-
-    ingress_class_name: str = 'nginx'
-    '''Ingress class name (e.g., 'nginx', 'traefik').'''
-
-    ingress_annotations: Optional[dict] = None
-    '''Additional annotations for the Ingress resource.'''
+    '''CPU and memory requests/limits for Polaris pods.'''
 
     metrics_enabled: bool = True
-    '''Enable metrics collection for Polaris.'''
+    '''Enable Prometheus metrics collection.'''
 
     logging_level: str = 'INFO'
-    '''Root logging level for Polaris.'''
+    '''Root logging level.'''
 
     logging_console_json: bool = False
-    '''Enable JSON format for console logs.'''
+    '''Emit console logs in JSON format.'''
 
     autoscaling_enabled: bool = True
-    '''Enable horizontal pod autoscaler.'''
+    '''Enable the Horizontal Pod Autoscaler.'''
 
     autoscaling_min_replicas: int = 1
-    '''Minimum replicas for autoscaling.'''
+    '''Minimum HPA replicas.'''
 
     autoscaling_max_replicas: int = 2
-    '''Maximum replicas for autoscaling.'''
+    '''Maximum HPA replicas.'''
+
+    cluster_domain: str = 'cluster.local'
+    '''Kubernetes cluster domain suffix.'''
+
+    ingress_enabled: bool = True
+    '''Create an Ingress for external access.'''
+
+    ingress_domain: Optional[str] = None
+    '''Base domain. Creates polaris.<domain>.'''
+
+    ingress_class_name: str = 'nginx'
+    '''Ingress class name.'''
+
+    ingress_annotations: Optional[dict] = None
+    '''Extra Ingress annotations.'''
+
+    extra_values: dict = field(default_factory=dict)
+    '''Additional Helm values deep-merged over the base config.'''
 
 
 class Polaris(pulumi.ComponentResource):
     '''
-    A reusable Pulumi component for deploying Apache Polaris to Kubernetes using Helm.
+    Deploys Apache Polaris (Iceberg REST catalog) to Kubernetes.
 
-    Apache Polaris is an open-source, fully-featured catalog for Apache Iceberg.
-    It implements the Iceberg REST catalog API and provides a centralized place 
-    to manage Iceberg tables across multiple query engines.
+    Call create_bootstrap() once before any other provisioning method.
+    Then call create_catalogs(), create_roles(), and create_principals()
+    in dependency order to set up the full RBAC and catalog hierarchy.
+
+    Outputs:
+        namespace          — Kubernetes namespace
+        host               — Internal DNS hostname
+        endpoint           — Internal REST API URL (http://<host>:<port>)
+        management_endpoint — Internal management URL
+        api_url            — External URL if ingress enabled, else same as endpoint
 
     Example:
-        ```python
-        from polaris import Polaris, PolarisArgs
-
-        polaris = Polaris('my-polaris', PolarisArgs(
-            namespace='data',
+        polaris = Polaris('polaris', PolarisArgs(
+            namespace=ns.metadata.name,
             persistence_type='relational-jdbc',
-            persistence_secret_name='polaris-db-creds',
-            persistence_jdbc_url='jdbc:postgresql://postgres:5432/polaris',
+            persistence_secret_name='polaris-db',
+            ingress_enabled=True,
+            ingress_domain='k8lh.local',
         ))
-        ```
+
+        bootstrap = polaris.create_bootstrap('bootstrap',
+            root_client_secret=config.require_secret('polaris_root_secret'))
+        catalogs = polaris.create_catalogs('catalogs', [...],
+            opts=pulumi.ResourceOptions(depends_on=[bootstrap]))
+        roles    = polaris.create_roles('roles', [...],
+            opts=pulumi.ResourceOptions(depends_on=[catalogs]))
+        polaris.create_principals('principals', [...],
+            opts=pulumi.ResourceOptions(depends_on=[roles]))
     '''
 
     def __init__(
@@ -218,144 +283,119 @@ class Polaris(pulumi.ComponentResource):
         super().__init__('k8lh:polaris:Polaris', name, {}, opts)
 
         args = args or PolarisArgs()
-        self._args = args
-        self._name = name
-        # Helm release name determines K8s resource names
         self._release_name = args.release_name or name
+        self._namespace = Output.from_input(args.namespace)
+        # Internal URL used by provisioning Jobs (Jobs run inside the cluster)
         self._polaris_url = f'http://{self._release_name}:{args.service_port}'
-        self._mgmt_url = f'http://{self._release_name}:{args.management_port}'
-        # Bootstrap credentials (set by create_bootstrap, used by create_catalogs)
+        # Bootstrap credentials — set by create_bootstrap(), read by create_catalogs/roles/principals
         self._root_client_id: str = 'root'
         self._root_client_secret: Output[str] = Output.from_input('root')
+        # Fields needed by create_bootstrap()
+        self._image_tag                        = args.image_tag
+        self._realms                           = args.realms
+        self._persistence_type                 = args.persistence_type
+        self._persistence_secret_name          = args.persistence_secret_name
+        self._persistence_secret_username_key  = args.persistence_secret_username_key
+        self._persistence_secret_password_key  = args.persistence_secret_password_key
+        self._persistence_secret_jdbc_url_key  = args.persistence_secret_jdbc_url_key
 
-        # Resolve Input fields upfront
-        self._namespace = Output.from_input(args.namespace)
-
-        # Build Helm values from args
-        values = self._build_values(args)
-
-        # Deploy Polaris using Helm chart
-        self.chart = Chart(
-            f'{name}-chart',
-            ChartOpts(
-                chart='polaris',
-                version=args.chart_version,
-                namespace=self._namespace,
-                fetch_opts=FetchOpts(
-                    repo=args.chart_repo,
-                ),
-                values=values,
-            ),
-            opts=pulumi.ResourceOptions(parent=self),
-        )
-
-        # Export useful outputs
-        self.namespace = self._namespace
-        self.host = pulumi.Output.concat(
-            self._release_name, '.', self._namespace,
-            '.svc.', args.cluster_domain
-        )
-        self.endpoint = pulumi.Output.concat(
-            'http://', self.host, ':', str(args.service_port)
-        )
-        self.management_endpoint = pulumi.Output.concat(
-            'http://', self._release_name, '.', self._namespace,
-            '.svc.', args.cluster_domain, ':', str(args.management_port)
-        )
-
-        # Create Ingress if enabled
-        self.ingress = None
-        if args.ingress_enabled and args.ingress_domain:
-            self.api_host = f'polaris.{args.ingress_domain}'
-            self.ingress = self._create_ingress(args)
-            self.api_url = Output.from_input(f'http://{self.api_host}')
-        else:
-            self.api_url = self.endpoint
-
-        self.register_outputs({
-            'namespace': self.namespace,
-            'endpoint': self.endpoint,
-            'management_endpoint': self.management_endpoint,
-            'api_url': self.api_url,
-            'host': self.host,
-        })
-
-    def _create_ingress(self, args: PolarisArgs) -> Ingress:
-        '''Create Ingress for Polaris API access.'''
-        annotations = {
-            'nginx.ingress.kubernetes.io/proxy-body-size': '0',
-            'nginx.ingress.kubernetes.io/proxy-read-timeout': '600',
-            'nginx.ingress.kubernetes.io/proxy-send-timeout': '600',
-        }
-        if args.ingress_annotations:
-            annotations.update(args.ingress_annotations)
-
-        spec = json.loads((CONFIG_DIR / 'resources/ingress_spec.json').read_text())
-        spec['ingressClassName'] = args.ingress_class_name
-        spec['rules'][0]['host'] = self.api_host
-        spec['rules'][0]['http']['paths'][0]['backend']['service']['name'] = self._release_name
-        spec['rules'][0]['http']['paths'][0]['backend']['service']['port']['number'] = args.service_port
-
-        return Ingress(
-            f'{self._release_name}-ingress',
-            metadata={'namespace': self._namespace, 'annotations': annotations},
-            spec=spec,
-            opts=pulumi.ResourceOptions(parent=self, depends_on=[self.chart]),
-        )
-
-    def _build_values(self, args: PolarisArgs) -> dict:
-        '''Build Helm chart values from PolarisArgs.'''
+        # ── Helm values ───────────────────────────────────────────────────────
         values = json.loads((CONFIG_DIR / 'helm/helm_values_polaris.json').read_text())
 
-        # Override with args
-        values['fullnameOverride'] = self._release_name
-        values['replicaCount'] = args.replica_count
-        values['image']['repository'] = args.image_repository
-        values['image']['tag'] = args.image_tag
-        values['image']['pullPolicy'] = args.image_pull_policy
-        values['service']['type'] = args.service_type
-        values['service']['ports'][0]['port'] = args.service_port
+        values['fullnameOverride']                = self._release_name
+        values['replicaCount']                    = args.replica_count
+        values['image']['repository']             = args.image_repository
+        values['image']['tag']                    = args.image_tag
+        values['image']['pullPolicy']             = args.image_pull_policy
+        values['service']['type']                 = args.service_type
+        values['service']['ports'][0]['port']     = args.service_port
         values['managementService']['ports'][0]['port'] = args.management_port
-        values['resources'] = args.resources
-        values['realmContext']['realms'] = args.realms
-        values['metrics']['enabled'] = args.metrics_enabled
-        values['logging']['level'] = args.logging_level
-        values['logging']['console']['json'] = args.logging_console_json
-        values['autoscaling']['enabled'] = args.autoscaling_enabled
-        values['autoscaling']['minReplicas'] = args.autoscaling_min_replicas
-        values['autoscaling']['maxReplicas'] = args.autoscaling_max_replicas
+        values['resources']                       = args.resources
+        values['realmContext']['realms']          = args.realms
+        values['metrics']['enabled']              = args.metrics_enabled
+        values['logging']['level']                = args.logging_level
+        values['logging']['console']['json']      = args.logging_console_json
+        values['autoscaling']['enabled']          = args.autoscaling_enabled
+        values['autoscaling']['minReplicas']      = args.autoscaling_min_replicas
+        values['autoscaling']['maxReplicas']      = args.autoscaling_max_replicas
 
-        # Configure persistence
         if args.persistence_type == 'relational-jdbc':
             values['persistence'] = {
                 'type': 'relational-jdbc',
                 'relationalJdbc': {
                     'secret': {
-                        'name': args.persistence_secret_name,
+                        'name':     args.persistence_secret_name,
                         'username': args.persistence_secret_username_key,
                         'password': args.persistence_secret_password_key,
-                        'jdbcUrl': args.persistence_secret_jdbc_url_key,
+                        'jdbcUrl':  args.persistence_secret_jdbc_url_key,
                     },
                 },
             }
         else:
             values['persistence'] = {'type': 'in-memory'}
 
-        # Merge extra values (allowing overrides)
-        values = self._deep_merge(values, args.extra_values)
+        values = _deep_merge(values, args.extra_values)
 
-        return values
+        # ── Chart ─────────────────────────────────────────────────────────────
+        self.chart = Chart(
+            f'{name}-chart',
+            ChartOpts(
+                chart='polaris',
+                version=args.chart_version,
+                namespace=self._namespace,
+                fetch_opts=FetchOpts(repo=args.chart_repo),
+                values=values,
+            ),
+            opts=pulumi.ResourceOptions(parent=self),
+        )
 
-    @staticmethod
-    def _deep_merge(base: dict, override: dict) -> dict:
-        '''Deep merge two dictionaries, with override taking precedence.'''
-        result = base.copy()
-        for key, value in override.items():
-            if key in result and isinstance(result[key], dict) and isinstance(value, dict):
-                result[key] = Polaris._deep_merge(result[key], value)
-            else:
-                result[key] = value
-        return result
+        # ── Outputs ───────────────────────────────────────────────────────────
+        self.namespace = self._namespace
+        self.host = Output.concat(
+            self._release_name, '.', self._namespace,
+            '.svc.', args.cluster_domain,
+        )
+        self.endpoint = Output.concat('http://', self.host, ':', str(args.service_port))
+        self.management_endpoint = Output.concat(
+            'http://', self._release_name, '.', self._namespace,
+            '.svc.', args.cluster_domain, ':', str(args.management_port),
+        )
+
+        # ── Ingress ───────────────────────────────────────────────────────────
+        if args.ingress_enabled and args.ingress_domain:
+            api_host = f'polaris.{args.ingress_domain}'
+
+            annotations = {
+                'nginx.ingress.kubernetes.io/proxy-body-size':    '0',
+                'nginx.ingress.kubernetes.io/proxy-read-timeout': '600',
+                'nginx.ingress.kubernetes.io/proxy-send-timeout': '600',
+            }
+            if args.ingress_annotations:
+                annotations.update(args.ingress_annotations)
+
+            spec = json.loads((CONFIG_DIR / 'resources/ingress_spec.json').read_text())
+            spec['ingressClassName'] = args.ingress_class_name
+            spec['rules'][0]['host'] = api_host
+            spec['rules'][0]['http']['paths'][0]['backend']['service']['name']           = self._release_name
+            spec['rules'][0]['http']['paths'][0]['backend']['service']['port']['number'] = args.service_port
+
+            Ingress(
+                f'{self._release_name}-ingress',
+                metadata={'namespace': self._namespace, 'annotations': annotations},
+                spec=spec,
+                opts=pulumi.ResourceOptions(parent=self, depends_on=[self.chart]),
+            )
+            self.api_url = Output.from_input(f'http://{api_host}')
+        else:
+            self.api_url = self.endpoint
+
+        self.register_outputs({
+            'namespace':           self.namespace,
+            'endpoint':            self.endpoint,
+            'management_endpoint': self.management_endpoint,
+            'api_url':             self.api_url,
+            'host':                self.host,
+        })
 
     def create_bootstrap(
         self,
@@ -365,68 +405,52 @@ class Polaris(pulumi.ComponentResource):
         opts: pulumi.ResourceOptions = None,
     ) -> Job:
         '''
-        Bootstrap Polaris by creating the database schema and initial principal credentials.
+        Bootstrap Polaris: create the database schema and the root principal.
 
-        This must be run before any catalogs can be created. The bootstrap job runs
-        the polaris-admin-tool to:
-        1. Create the polaris_schema in the database
-        2. Create the root principal with the specified credentials
+        Must be run once before create_catalogs(), create_roles(), and
+        create_principals(). Uses the polaris-admin-tool image.
 
         Args:
-            name: Unique name for the Pulumi resource.
-            root_client_id: Client ID for the root principal (default: 'root').
-            root_client_secret: Client secret for the root principal (default: 'root').
-            opts: Optional Pulumi resource options.
+            name:               Pulumi resource name prefix.
+            root_client_id:     Client ID for the root principal (default: "root").
+            root_client_secret: Client secret. Accepts a Pulumi secret Output.
+            opts:               Optional extra resource options.
 
         Returns:
-            The Kubernetes Job resource that bootstraps Polaris.
+            The Kubernetes Job resource.
 
         Example:
-            ```python
-            polaris = Polaris('my-polaris', PolarisArgs(
-                namespace='data',
-                persistence_type='relational-jdbc',
-                persistence_secret_name='polaris-db-creds',
-            ))
-            
-            # Bootstrap must run before creating catalogs
-            bootstrap = polaris.create_bootstrap('polaris-bootstrap')
-            
-            polaris.create_catalogs('catalogs', [...],
-                opts=pulumi.ResourceOptions(depends_on=[bootstrap]))
-            ```
+            bootstrap = polaris.create_bootstrap(
+                'bootstrap',
+                root_client_secret=config.require_secret('polaris_root_secret'),
+                opts=pulumi.ResourceOptions(depends_on=[psql_job]),
+            )
         '''
-        args = self._args
-
-        # Store credentials for use by create_catalogs
-        self._root_client_id = root_client_id
+        # Store for downstream provisioning jobs
+        self._root_client_id     = root_client_id
         self._root_client_secret = Output.from_input(root_client_secret)
 
-        # Build the bootstrap arguments
-        realm = args.realms[0] if args.realms else 'POLARIS'
+        realm = self._realms[0] if self._realms else 'POLARIS'
 
-        # Load bootstrap script template
         script_template = (CONFIG_DIR / 'scripts/bootstrap.sh').read_text()
 
-        # Build bootstrap script with resolved credentials
         bootstrap_script = self._root_client_secret.apply(
             lambda secret: script_template
             .replace('{{REALM}}', realm)
             .replace('{{CREDENTIAL}}', f'{realm},{root_client_id},{secret}')
         )
 
-        # Load job spec and configure
         spec = json.loads((CONFIG_DIR / 'jobs/bootstrap_job_spec.json').read_text())
         container = spec['template']['spec']['containers'][0]
-        container['image'] = f'apache/polaris-admin-tool:{args.image_tag}'
-        container['args'] = [bootstrap_script]
-        container['env'][0]['value'] = args.persistence_type
-        container['env'][1]['valueFrom']['secretKeyRef']['name'] = args.persistence_secret_name
-        container['env'][1]['valueFrom']['secretKeyRef']['key'] = args.persistence_secret_username_key
-        container['env'][2]['valueFrom']['secretKeyRef']['name'] = args.persistence_secret_name
-        container['env'][2]['valueFrom']['secretKeyRef']['key'] = args.persistence_secret_password_key
-        container['env'][3]['valueFrom']['secretKeyRef']['name'] = args.persistence_secret_name
-        container['env'][3]['valueFrom']['secretKeyRef']['key'] = args.persistence_secret_jdbc_url_key
+        container['image']            = f'apache/polaris-admin-tool:{self._image_tag}'
+        container['args']             = [bootstrap_script]
+        container['env'][0]['value']  = self._persistence_type
+        container['env'][1]['valueFrom']['secretKeyRef']['name'] = self._persistence_secret_name
+        container['env'][1]['valueFrom']['secretKeyRef']['key']  = self._persistence_secret_username_key
+        container['env'][2]['valueFrom']['secretKeyRef']['name'] = self._persistence_secret_name
+        container['env'][2]['valueFrom']['secretKeyRef']['key']  = self._persistence_secret_password_key
+        container['env'][3]['valueFrom']['secretKeyRef']['name'] = self._persistence_secret_name
+        container['env'][3]['valueFrom']['secretKeyRef']['key']  = self._persistence_secret_jdbc_url_key
 
         job_opts = pulumi.ResourceOptions(parent=self, depends_on=[self.chart])
         if opts:
@@ -445,41 +469,61 @@ class Polaris(pulumi.ComponentResource):
         catalogs: List[CatalogArgs],
         opts: pulumi.ResourceOptions = None,
     ) -> Job:
-        '''Create catalogs in Polaris via REST API. Requires bootstrap to run first.'''
+        '''
+        Create Iceberg catalogs in Polaris via REST API.
+
+        Requires create_bootstrap() to have completed first.
+        All S3/MinIO credentials are resolved at deploy time — they may be Pulumi Outputs.
+
+        Args:
+            name:     Pulumi resource name prefix.
+            catalogs: List of catalog configurations.
+            opts:     Optional extra resource options (e.g. depends_on=[bootstrap]).
+
+        Returns:
+            The Kubernetes Job resource.
+
+        Example:
+            polaris.create_catalogs('catalogs', [
+                CatalogArgs(
+                    name='bronze',
+                    s3_endpoint=minio.endpoint,
+                    s3_bucket='bronze',
+                    s3_access_key='minioadmin',
+                    s3_secret_key=minio_password,
+                ),
+            ], opts=pulumi.ResourceOptions(depends_on=[bootstrap]))
+        '''
         script_template = (CONFIG_DIR / 'scripts/create_catalogs.sh').read_text()
 
-        def make_call(c, r):
-            '''Build a single create_catalog shell command.'''
-            base = c.default_base_location or f's3://{c.s3_bucket}/'
-            return (
-                f"create_catalog '{c.name}' '{c.s3_bucket}' "
-                f"'{r[f'{c.name}_endpoint']}' '{r[f'{c.name}_access_key']}' "
-                f"'{r[f'{c.name}_secret_key']}' '{c.s3_region}' "
-                f"'{str(c.s3_path_style_access).lower()}' '{base}'"
-            )
-
-        def build_script(r):
-            '''Replace template placeholders with resolved values.'''
-            return (
-                script_template
-                .replace('{{POLARIS_URL}}', self._polaris_url)
-                .replace('{{CLIENT_ID}}', self._root_client_id)
-                .replace('{{CLIENT_SECRET}}', r['secret'])
-                .replace('{{CATALOG_CALLS}}', '\n'.join(make_call(c, r) for c in catalogs))
-            )
-        
-        # Gather all Output values that need resolution
+        # Gather all Output[str] values from all catalogs keyed by catalog name
         inputs = {'secret': self._root_client_secret}
         for c in catalogs:
-            inputs[f'{c.name}_endpoint'] = c.s3_endpoint
+            inputs[f'{c.name}_endpoint']   = c.s3_endpoint
             inputs[f'{c.name}_access_key'] = c.s3_access_key
             inputs[f'{c.name}_secret_key'] = c.s3_secret_key
 
-        script = pulumi.Output.all(**inputs).apply(build_script)
+        def build_script(r: dict) -> str:
+            def make_call(c: CatalogArgs) -> str:
+                base = c.default_base_location or f's3://{c.s3_bucket}/'
+                return (
+                    f"create_catalog '{c.name}' '{c.s3_bucket}' "
+                    f"'{r[f'{c.name}_endpoint']}' '{r[f'{c.name}_access_key']}' "
+                    f"'{r[f'{c.name}_secret_key']}' '{c.s3_region}' "
+                    f"'{str(c.s3_path_style_access).lower()}' '{base}'"
+                )
+            return (
+                script_template
+                .replace('{{POLARIS_URL}}',    self._polaris_url)
+                .replace('{{CLIENT_ID}}',      self._root_client_id)
+                .replace('{{CLIENT_SECRET}}',  r['secret'])
+                .replace('{{CATALOG_CALLS}}',  '\n'.join(make_call(c) for c in catalogs))
+            )
 
-        # Load job spec and inject script
         spec = json.loads((CONFIG_DIR / 'jobs/catalog_job_spec.json').read_text())
-        spec['template']['spec']['containers'][0]['args'] = [script]
+        spec['template']['spec']['containers'][0]['args'] = [
+            pulumi.Output.all(**inputs).apply(build_script)
+        ]
 
         job_opts = pulumi.ResourceOptions(parent=self, depends_on=[self.chart])
         if opts:
@@ -492,33 +536,93 @@ class Polaris(pulumi.ComponentResource):
             opts=job_opts,
         )
 
+    def create_roles(
+        self,
+        name: str,
+        roles: List[RoleArgs],
+        opts: pulumi.ResourceOptions = None,
+    ) -> Job:
+        '''
+        Create principal roles and grant catalog access in Polaris via REST API.
+
+        Requires create_bootstrap() to have completed first.
+
+        Args:
+            name:  Pulumi resource name prefix.
+            roles: List of role configurations with catalog grants.
+            opts:  Optional extra resource options (e.g. depends_on=[catalogs_job]).
+
+        Returns:
+            The Kubernetes Job resource.
+
+        Example:
+            polaris.create_roles('roles', [
+                RoleArgs(
+                    name='data_engineer',
+                    catalog_grants=[
+                        CatalogGrantArgs(catalog='bronze', role='catalog_admin'),
+                        CatalogGrantArgs(catalog='silver', role='catalog_admin'),
+                    ],
+                ),
+            ], opts=pulumi.ResourceOptions(depends_on=[catalogs]))
+        '''
+        script_template = (CONFIG_DIR / 'scripts/manage_roles.sh').read_text()
+
+        def build_script(secret: str) -> str:
+            lines = []
+            for r in roles:
+                lines.append(f"create_role '{r.name}'")
+                for grant in r.catalog_grants:
+                    lines.append(f"grant_catalog_role '{r.name}' '{grant.catalog}' '{grant.role}'")
+            return (
+                script_template
+                .replace('{{POLARIS_URL}}',   self._polaris_url)
+                .replace('{{CLIENT_ID}}',     self._root_client_id)
+                .replace('{{CLIENT_SECRET}}', secret)
+                .replace('{{ROLE_CALLS}}',    '\n'.join(lines))
+            )
+
+        spec = json.loads((CONFIG_DIR / 'jobs/role_job_spec.json').read_text())
+        spec['template']['spec']['containers'][0]['args'] = [
+            self._root_client_secret.apply(build_script)
+        ]
+
+        job_opts = pulumi.ResourceOptions(parent=self, depends_on=[self.chart])
+        if opts:
+            job_opts = pulumi.ResourceOptions.merge(job_opts, opts)
+
+        return Job(
+            f'{name}-role-job',
+            metadata={'namespace': self._namespace, 'labels': {'app': 'polaris-roles'}},
+            spec=spec,
+            opts=job_opts,
+        )
+
     def create_principals(
         self,
         name: str,
-        principals: List['PrincipalArgs'],
+        principals: List[PrincipalArgs],
         provisioner_sa_name: Optional[Input[str]] = None,
         opts: pulumi.ResourceOptions = None,
     ) -> Job:
         '''
-        Create principals and assign RBAC roles in Polaris via REST API.
+        Create Polaris principals and assign roles via REST API.
 
-        Creates each principal if it doesn't exist, then assigns the specified
-        roles if not already assigned. Requires bootstrap to run first.
+        Each principal's OAuth2 credentials (CLIENT_ID / CLIENT_SECRET) are
+        stored in the K8s Secret named by credentials_secret_name. The job pod
+        must run under a ServiceAccount with get/create permissions on Secrets.
 
         Args:
-            name: Unique name for the Pulumi resource.
-            principals: List of principal configurations with roles to assign.
-            provisioner_sa_name: Name of a Kubernetes ServiceAccount to run the job pod under.
-                Required when any principal has credentials_secret_name set — the SA must
-                have permission to get/create Secrets in the namespace. Use the
-                ServiceAccounts component to provision this SA before calling create_principals().
-            opts: Optional Pulumi resource options.
+            name:                Pulumi resource name prefix.
+            principals:          List of principal configurations.
+            provisioner_sa_name: ServiceAccount name for the job pod. Required
+                                 when any principal has credentials_secret_name set.
+            opts:                Optional extra resource options.
 
         Returns:
-            The Kubernetes Job resource that manages principals.
+            The Kubernetes Job resource.
 
         Example:
-            ```python
             from service_accounts import ServiceAccounts, ServiceAccountsArgs, ServiceAccountArgs, PolicyRuleArgs
 
             sas = ServiceAccounts('sas', ServiceAccountsArgs(namespace=ns.metadata.name))
@@ -531,32 +635,28 @@ class Polaris(pulumi.ComponentResource):
                 PrincipalArgs(name='trino', roles=['data_engineer'],
                               credentials_secret_name='polaris-trino-credentials'),
             ], provisioner_sa_name='polaris-principal-provisioner',
-               opts=pulumi.ResourceOptions(depends_on=[bootstrap, provisioner_sa]))
-            ```
+               opts=pulumi.ResourceOptions(depends_on=[roles, provisioner_sa]))
         '''
         script_template = (CONFIG_DIR / 'scripts/manage_principals.sh').read_text()
 
-        def make_calls(principals: List['PrincipalArgs']) -> str:
+        def build_script(secret: str) -> str:
             lines = []
             for p in principals:
                 lines.append(f"create_principal_with_secret '{p.name}' '{p.credentials_secret_name}'")
                 for role in p.roles:
                     lines.append(f"assign_role '{p.name}' '{role}'")
-            return '\n'.join(lines)
-
-        def build_script(secret: str) -> str:
             return (
                 script_template
-                .replace('{{POLARIS_URL}}', self._polaris_url)
-                .replace('{{CLIENT_ID}}', self._root_client_id)
-                .replace('{{CLIENT_SECRET}}', secret)
-                .replace('{{PRINCIPAL_CALLS}}', make_calls(principals))
+                .replace('{{POLARIS_URL}}',      self._polaris_url)
+                .replace('{{CLIENT_ID}}',        self._root_client_id)
+                .replace('{{CLIENT_SECRET}}',    secret)
+                .replace('{{PRINCIPAL_CALLS}}',  '\n'.join(lines))
             )
 
-        script = self._root_client_secret.apply(build_script)
-
         spec = json.loads((CONFIG_DIR / 'jobs/principal_job_spec.json').read_text())
-        spec['template']['spec']['containers'][0]['args'] = [script]
+        spec['template']['spec']['containers'][0]['args'] = [
+            self._root_client_secret.apply(build_script)
+        ]
         if provisioner_sa_name:
             spec['template']['spec']['serviceAccountName'] = provisioner_sa_name
 
@@ -567,81 +667,6 @@ class Polaris(pulumi.ComponentResource):
         return Job(
             f'{name}-principal-job',
             metadata={'namespace': self._namespace, 'labels': {'app': 'polaris-principals'}},
-            spec=spec,
-            opts=job_opts,
-        )
-
-    def create_roles(
-        self,
-        name: str,
-        roles: List['RoleArgs'],
-        opts: pulumi.ResourceOptions = None,
-    ) -> Job:
-        '''
-        Create principal roles and grant catalog access in Polaris via REST API.
-
-        Creates each principal role if it doesn't exist, then grants catalog roles
-        if not already granted. Requires bootstrap to run first.
-
-        Args:
-            name: Unique name for the Pulumi resource.
-            roles: List of role configurations with catalog grants.
-            opts: Optional Pulumi resource options.
-
-        Returns:
-            The Kubernetes Job resource that manages roles.
-
-        Example:
-            ```python
-            polaris = Polaris('my-polaris', PolarisArgs(namespace='data'))
-            bootstrap = polaris.create_bootstrap('polaris-bootstrap')
-
-            polaris.create_roles('roles', [
-                RoleArgs(
-                    name='data_engineer',
-                    catalog_grants=[
-                        CatalogGrantArgs(catalog='bronze', role='catalog_admin'),
-                        CatalogGrantArgs(catalog='silver', role='catalog_admin'),
-                        CatalogGrantArgs(catalog='gold', role='catalog_admin'),
-                    ],
-                ),
-            ], opts=pulumi.ResourceOptions(depends_on=[bootstrap]))
-            ```
-        '''
-        script_template = (CONFIG_DIR / 'scripts/manage_roles.sh').read_text()
-
-        def make_calls(roles: List['RoleArgs']) -> str:
-            '''Build shell commands for creating roles and granting catalog access.'''
-            lines = []
-            for r in roles:
-                lines.append(f"create_role '{r.name}'")
-                for grant in r.catalog_grants:
-                    lines.append(f"grant_catalog_role '{r.name}' '{grant.catalog}' '{grant.role}'")
-            return '\n'.join(lines)
-
-        def build_script(secret: str) -> str:
-            '''Replace template placeholders with resolved values.'''
-            return (
-                script_template
-                .replace('{{POLARIS_URL}}', self._polaris_url)
-                .replace('{{CLIENT_ID}}', self._root_client_id)
-                .replace('{{CLIENT_SECRET}}', secret)
-                .replace('{{ROLE_CALLS}}', make_calls(roles))
-            )
-
-        script = self._root_client_secret.apply(build_script)
-
-        # Load job spec and inject script
-        spec = json.loads((CONFIG_DIR / 'jobs/role_job_spec.json').read_text())
-        spec['template']['spec']['containers'][0]['args'] = [script]
-
-        job_opts = pulumi.ResourceOptions(parent=self, depends_on=[self.chart])
-        if opts:
-            job_opts = pulumi.ResourceOptions.merge(job_opts, opts)
-
-        return Job(
-            f'{name}-role-job',
-            metadata={'namespace': self._namespace, 'labels': {'app': 'polaris-roles'}},
             spec=spec,
             opts=job_opts,
         )

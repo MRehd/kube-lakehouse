@@ -1,4 +1,25 @@
-'''FastAPI Kafka producer — builds image via Docker and deploys to Kubernetes.'''
+'''
+FastAPI Kafka producer — builds a Docker image and deploys it to Kubernetes.
+
+Builds the producer image from infra/producer/app/, pushes it to a registry,
+and deploys a Deployment + Service (+ optional Ingress). The FastAPI app exposes
+/start-stream and /stop-stream endpoints to control Kafka producers at runtime —
+no Kafka config is needed at pod startup; it is passed as env vars.
+
+Example:
+    producer = Producer('producer', ProducerArgs(
+        namespace=ns.metadata.name,
+        image_name='docker.io/myuser/producer',
+        registry_username=config.require('docker_registry_username'),
+        registry_password=config.require_secret('docker_registry_password'),
+        env={
+            'KAFKA_BOOTSTRAP_SERVERS': kafka.bootstrap_servers,
+            'KAFKA_TOPIC':             'btc-prices',
+        },
+        ingress_enabled=True,
+        ingress_domain='k8lh.local',
+    ))
+'''
 
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -18,26 +39,55 @@ CONFIG_DIR = Path(__file__).parent.parent / 'config'
 
 @dataclass
 class ProducerArgs:
+    '''Configuration arguments for the producer deployment.'''
+
     namespace: Input[str]
+    '''Kubernetes namespace to deploy into (must already exist).'''
+
     image_name: str
     '''Full image name without tag, e.g. "docker.io/myuser/producer".'''
 
     registry_username: Input[str]
+    '''Docker registry username. Leave empty to skip push (local dev).'''
+
     registry_password: Input[str]
+    '''Docker registry password or access token. Accepts a Pulumi secret Output.'''
+
     registry_server: str = 'https://index.docker.io/v1/'
+    '''Docker registry server URL.'''
 
     image_tag: str = 'latest'
+    '''Image tag to build and push.'''
+
     port: int = 8000
+    '''Container port exposed by the FastAPI app.'''
+
     replicas: int = 1
+    '''Number of pod replicas.'''
+
     cpu_request: str = '100m'
+    '''CPU request for the pod (e.g. "100m").'''
+
     cpu_limit: str = '500m'
+    '''CPU limit for the pod.'''
+
     memory_request: str = '128Mi'
+    '''Memory request for the pod.'''
+
     memory_limit: str = '256Mi'
+    '''Memory limit for the pod.'''
+
     env: Dict[str, str] = field(default_factory=dict)
+    '''Environment variables to inject into the pod (key=value). Values may be Pulumi Outputs.'''
 
     ingress_enabled: bool = False
+    '''Create an Ingress for external access.'''
+
     ingress_domain: str = ''
+    '''Base domain. Creates producer.<domain>.'''
+
     ingress_class_name: str = 'nginx'
+    '''Ingress class name.'''
 
 
 class Producer(pulumi.ComponentResource):

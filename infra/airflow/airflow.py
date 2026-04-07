@@ -1,4 +1,41 @@
-'''Apache Airflow on Kubernetes — official Helm chart.'''
+'''
+Apache Airflow on Kubernetes — official Helm chart.
+
+Deploys Airflow using the official Apache Airflow Helm chart (v1.20.0+).
+Uses KubernetesExecutor by default — each Airflow task runs in its own pod,
+created on demand and deleted when the task completes. Zero idle worker cost.
+
+Required K8s secrets (create in __main__.py before deploying Airflow):
+    airflow-metadata  — {"connection": "postgresql+psycopg2://user:pw@host:5432/airflow"}
+    airflow-fernet    — {"fernet-key": "<Fernet key>"}
+    airflow-webserver — {"webserver-secret-key": "<hex secret>"}
+
+DAGs are synced from a git repository via git-sync sidecar. Set git_repo in AirflowArgs.
+
+Connections are auto-registered via AIRFLOW_CONN_<ID> env vars — no manual UI step needed.
+
+Example:
+    airflow = Airflow('airflow', AirflowArgs(
+        namespace=ns.metadata.name,
+        admin_password=config.require_secret('airflow_admin_password'),
+        git_repo='https://github.com/org/dags-repo.git',
+        git_branch='master',
+        git_credentials_secret='airflow-git-credentials',
+        env={
+            'KAFKA_BOOTSTRAP_SERVERS': kafka.bootstrap_servers,
+            'MINIO_ENDPOINT':          minio.endpoint,
+        },
+        env_secrets=['spark-s3-credentials'],
+        connections=[
+            AirflowConnectionArgs(
+                conn_id='spark_default',
+                uri=spark.connect_server_url,
+            ),
+        ],
+        ingress_enabled=True,
+        ingress_domain='k8lh.local',
+    ))
+'''
 
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -12,120 +49,181 @@ from pulumi_kubernetes.helm.v3 import Chart, ChartOpts, FetchOpts
 CONFIG_DIR = Path(__file__).parent.parent / 'config'
 
 
+def _deep_merge(base: dict, override: dict) -> dict:
+    '''Recursively merge override into base, with override taking precedence.'''
+    result = base.copy()
+    for key, value in override.items():
+        if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+            result[key] = _deep_merge(result[key], value)
+        else:
+            result[key] = value
+    return result
+
+
 @dataclass
 class AirflowConnectionArgs:
+    '''A single Airflow connection to auto-register via AIRFLOW_CONN_<ID> env var.'''
+
     conn_id: str
-    '''Airflow connection ID, e.g. "spark_default". Injected as AIRFLOW_CONN_<ID_UPPER>.'''
+    '''
+    Airflow connection ID (e.g. "spark_default").
+    Injected as AIRFLOW_CONN_<ID_UPPER> into the scheduler, webserver, and worker pods.
+    Airflow parses and registers it on startup — no manual UI step needed.
+    '''
+
     uri: Input[str]
     '''
-    Connection URI, e.g. "sc://spark-connect.ns.svc.cluster.local:15002".
-    Accepts Pulumi Output[str] — resolved at deploy time.
+    Connection URI (e.g. "sc://spark-connect.ns.svc.cluster.local:15002").
+    Accepts a Pulumi Output — resolved at deploy time.
     '''
 
 
 @dataclass
 class AirflowArgs:
+    '''Configuration arguments for Apache Airflow deployment.'''
+
     namespace: Input[str] = 'default'
+    '''Kubernetes namespace to deploy into (must already exist).'''
+
     release_name: Optional[str] = None
+    '''Helm release name — controls K8s resource names. Defaults to the Pulumi resource name.'''
+
     chart_version: str = '1.20.0'
+    '''Version of the official Apache Airflow Helm chart.'''
 
     executor: str = 'KubernetesExecutor'
     '''
-    Task executor.
+    Task executor backend.
     - "KubernetesExecutor" — each task gets its own K8s pod, zero idle cost (default)
     - "LocalExecutor"      — tasks run as subprocesses in the scheduler pod, no scaling
     '''
 
-    # External PostgreSQL — full SQLAlchemy URI stored in a K8s secret
+    # ── DB connection (full SQLAlchemy URI in a K8s secret) ───────────────────
     db_metadata_secret: str = 'airflow-metadata'
     '''
     K8s secret with a single "connection" key containing the full SQLAlchemy URI:
     postgresql+psycopg2://user:password@host:5432/airflow
-    Created in __main__.py via LakehouseSecrets.
+    Create in __main__.py via LakehouseSecrets before deploying Airflow.
     '''
 
-    # Encryption keys (required for stable operation)
+    # ── Encryption keys (required for stable multi-pod operation) ─────────────
     fernet_key_secret: str = 'airflow-fernet'
-    fernet_key_secret_key: str = 'fernet-key'
     '''K8s secret holding the Fernet key for encrypting stored connections/variables.'''
 
+    fernet_key_secret_key: str = 'fernet-key'
+    '''Key inside fernet_key_secret.'''
+
     webserver_secret_key_secret: str = 'airflow-webserver'
-    webserver_secret_key_secret_key: str = 'webserver-secret-key'
     '''K8s secret holding the Flask session signing key.'''
 
-    # Admin user
+    webserver_secret_key_secret_key: str = 'webserver-secret-key'
+    '''Key inside webserver_secret_key_secret.'''
+
+    # ── Admin user ────────────────────────────────────────────────────────────
     admin_username: str = 'admin'
+    '''Airflow admin username.'''
+
     admin_password: Input[str] = 'admin'
+    '''Airflow admin password. Accepts a Pulumi secret Output.'''
+
     admin_email: str = 'admin@example.com'
+    '''Admin user email.'''
+
     admin_firstname: str = 'Admin'
+    '''Admin user first name.'''
+
     admin_lastname: str = 'User'
+    '''Admin user last name.'''
 
-    # Webserver
+    # ── Webserver ─────────────────────────────────────────────────────────────
     webserver_replicas: int = 1
+    '''Number of webserver (api-server in Airflow 3.x) replicas.'''
 
-    # Git-sync for DAGs
+    # ── Git-sync for DAGs ─────────────────────────────────────────────────────
     git_repo: str = ''
-    '''Git repository URL containing DAG files. Required for git-sync.'''
+    '''Git repository URL containing DAG files. Leave empty to skip git-sync.'''
+
     git_branch: str = 'main'
+    '''Git branch to sync from.'''
+
     git_subpath: str = 'dags'
+    '''Subdirectory within the repo containing DAG files.'''
+
     git_sync_interval: int = 60
     '''Seconds between git-sync polling intervals.'''
+
     git_credentials_secret: str = ''
     '''
-    Name of a K8s secret with "GIT_SYNC_USERNAME" and "GIT_SYNC_PASSWORD" keys.
+    Name of a K8s secret with "GIT_SYNC_USERNAME" / "GIT_SYNC_PASSWORD" keys
+    (and their GITSYNC_* equivalents for git-sync v4 compatibility).
     Use "x-token" as the username and a GitHub Personal Access Token as the password.
     Leave empty for public repos.
     '''
 
-    # Plain environment variables injected into all pods
+    # ── Plain environment variables ───────────────────────────────────────────
     env: dict = field(default_factory=dict)
-    '''Plain key/value env vars injected into scheduler, webserver, and worker pods.'''
+    '''
+    Plain key/value env vars injected into scheduler, webserver, and worker pods.
+    Values may be Pulumi Outputs (e.g. kafka.bootstrap_servers, minio.endpoint).
+    '''
 
-    # K8s secrets mounted as env vars into all pods
+    # ── K8s secrets mounted as env vars ──────────────────────────────────────
     env_secrets: list = field(default_factory=list)
-    '''List of K8s secret names whose keys are injected as env vars via envFrom.secretRef.'''
+    '''
+    List of K8s secret names whose keys are injected as env vars via envFrom.secretRef.
+    Use for credentials that should not appear in Helm values (e.g. S3 access keys).
+    '''
 
-    # Airflow connections registered automatically via env vars
+    # ── Airflow connections auto-registered via env vars ──────────────────────
     connections: list = field(default_factory=list)
     '''
-    List of AirflowConnectionArgs. Each becomes an AIRFLOW_CONN_<ID_UPPER> env var,
-    which Airflow parses and registers as a connection — no manual UI step needed.
+    List of AirflowConnectionArgs. Each becomes AIRFLOW_CONN_<ID_UPPER>=<uri>,
+    which Airflow parses and registers as a connection on startup.
     Supports Output[str] URIs (e.g. spark.connect_server_url).
     '''
 
-    # Ingress
+    # ── Ingress ───────────────────────────────────────────────────────────────
     ingress_enabled: bool = False
+    '''Create an Ingress for the Airflow UI (api-server in Airflow 3.x).'''
+
     ingress_domain: str = ''
+    '''Base domain. Creates airflow.<domain>.'''
+
     ingress_class_name: str = 'nginx'
+    '''Ingress class name.'''
 
     extra_values: dict = field(default_factory=dict)
+    '''Additional Helm values deep-merged over the base config.'''
 
 
 class Airflow(pulumi.ComponentResource):
     '''
     Deploys Apache Airflow using the official Helm chart.
 
-    Uses KubernetesExecutor by default — each Airflow task runs in its own K8s pod,
-    created on demand and deleted when the task completes. Zero idle worker cost.
+    Uses KubernetesExecutor by default — each task runs in its own pod.
+    DAGs are synced from a git repository via the git-sync sidecar.
+    Connections are auto-registered via AIRFLOW_CONN_<ID> env vars.
 
-    DAGs are synced from a git repository via git-sync sidecar. Set git_repo in AirflowArgs.
+    Outputs:
+        namespace — Kubernetes namespace
+        ui_url    — http://airflow.<domain> if ingress enabled, else internal svc URL
 
-    Required K8s secrets (created in __main__.py before this resource):
-        airflow-metadata  — {"connection": "postgresql+psycopg2://user:pw@host:5432/airflow"}
-        airflow-fernet    — {"fernet-key": "<Fernet key>"}
-        airflow-webserver — {"webserver-secret-key": "<hex secret>"}
-
-    Connections:
-        Pass AirflowConnectionArgs in the connections list. Each is injected as
-        AIRFLOW_CONN_<ID_UPPER>=<uri> — Airflow auto-registers them on startup.
-        Supports Output[str] URIs so you can wire in dynamic endpoints directly:
-
+    Example:
+        airflow = Airflow('airflow', AirflowArgs(
+            namespace=ns.metadata.name,
+            admin_password=config.require_secret('airflow_admin_password'),
+            git_repo='https://github.com/org/dags.git',
+            git_branch='master',
+            git_credentials_secret='airflow-git-credentials',
             connections=[
                 AirflowConnectionArgs(
                     conn_id='spark_default',
                     uri=spark.connect_server_url,
                 ),
-            ]
+            ],
+            ingress_enabled=True,
+            ingress_domain='k8lh.local',
+        ))
     '''
 
     def __init__(
@@ -140,7 +238,66 @@ class Airflow(pulumi.ComponentResource):
         self._namespace = Output.from_input(args.namespace)
         release = args.release_name or name
 
-        values_output = self._build_values(args)
+        # Build the static portion of the Helm values synchronously.
+        v = json.loads((CONFIG_DIR / 'helm/helm_values_airflow.json').read_text())
+        v['executor']   = args.executor
+        v['postgresql'] = {'enabled': False}
+        v['data']       = {'metadataSecretName': args.db_metadata_secret}
+        v['fernetKeySecretName']          = args.fernet_key_secret
+        v['fernetKeySecretKey']           = args.fernet_key_secret_key
+        v['webserverSecretKeySecretName'] = args.webserver_secret_key_secret
+        v['webserverSecretKeySecretKey']  = args.webserver_secret_key_secret_key
+        v.setdefault('webserver', {})['replicas'] = args.webserver_replicas
+
+        if args.git_repo:
+            git_sync = {
+                'enabled': True,
+                'repo':    args.git_repo,
+                'branch':  args.git_branch,
+                'subPath': args.git_subpath,
+                'period':  f'{args.git_sync_interval}s',
+            }
+            if args.git_credentials_secret:
+                git_sync['credentialsSecret'] = args.git_credentials_secret
+            v['dags'] = {'gitSync': git_sync}
+
+        if args.env_secrets:
+            v['extraEnvFrom'] = [{'secretRef': {'name': s}} for s in args.env_secrets]
+
+        if args.ingress_enabled and args.ingress_domain:
+            v['ingress'] = {'apiServer': {
+                'enabled':          True,
+                'ingressClassName': args.ingress_class_name,
+                'hosts':            [{'name': f'airflow.{args.ingress_domain}'}],
+            }}
+
+        v = _deep_merge(v, args.extra_values)
+
+        # Resolve Output values: connection URIs, admin password, plain env var values.
+        conn_ids  = [c.conn_id for c in args.connections]
+        conn_uris = [Output.from_input(c.uri) for c in args.connections]
+        env_keys  = list(args.env.keys())
+        env_vals  = [Output.from_input(val) for val in args.env.values()]
+        n_conns   = len(conn_uris)
+
+        # Merge resolved Outputs into the values dict via a single-expression lambda.
+        values_output = Output.all(*conn_uris, Output.from_input(args.admin_password), *env_vals).apply(
+            lambda resolved: {
+                **v,
+                'airflowUser': {
+                    'username':  args.admin_username,
+                    'password':  resolved[n_conns],
+                    'email':     args.admin_email,
+                    'firstname': args.admin_firstname,
+                    'lastname':  args.admin_lastname,
+                    'role':      'Admin',
+                },
+                **({'env': [
+                    *[{'name': k, 'value': val} for k, val in zip(env_keys, resolved[n_conns + 1:])],
+                    *[{'name': f'AIRFLOW_CONN_{cid.upper()}', 'value': uri} for cid, uri in zip(conn_ids, resolved[:n_conns])],
+                ]} if env_keys or conn_ids else {}),
+            }
+        )
 
         self.chart = Chart(
             f'{name}-chart',
@@ -157,6 +314,7 @@ class Airflow(pulumi.ComponentResource):
         if args.ingress_enabled and args.ingress_domain:
             self.ui_url = Output.from_input(f'http://airflow.{args.ingress_domain}')
         else:
+            # Airflow 3.x renames webserver → api-server
             self.ui_url = Output.concat(
                 'http://', release, '-api-server.', self._namespace,
                 '.svc.cluster.local:8080',
@@ -165,100 +323,5 @@ class Airflow(pulumi.ComponentResource):
         self.namespace = self._namespace
         self.register_outputs({
             'namespace': self.namespace,
-            'ui_url': self.ui_url,
+            'ui_url':    self.ui_url,
         })
-
-    def _build_values(self, args: AirflowArgs) -> Output:
-        base = json.loads((CONFIG_DIR / 'helm/helm_values_airflow.json').read_text())
-
-        # Collect all Output values from connections so we can resolve them together
-        conn_ids = [c.conn_id for c in args.connections]
-        conn_uris = [Output.from_input(c.uri) for c in args.connections]
-        admin_password = Output.from_input(args.admin_password)
-
-        return Output.all(*conn_uris, admin_password).apply(lambda resolved: self._assemble_values(
-            base=base,
-            args=args,
-            conn_ids=conn_ids,
-            conn_uris=list(resolved[:-1]),
-            admin_password=resolved[-1],
-        ))
-
-    def _assemble_values(self, base: dict, args: AirflowArgs, conn_ids: list, conn_uris: list, admin_password: str) -> dict:
-        values = base.copy()
-
-        values['executor'] = args.executor
-
-        # DB — full SQLAlchemy URI in a K8s secret
-        values['postgresql'] = {'enabled': False}
-        values['data'] = {'metadataSecretName': args.db_metadata_secret}
-
-        # Encryption keys
-        values['fernetKeySecretName'] = args.fernet_key_secret
-        values['fernetKeySecretKey'] = args.fernet_key_secret_key
-        values['webserverSecretKeySecretName'] = args.webserver_secret_key_secret
-        values['webserverSecretKeySecretKey'] = args.webserver_secret_key_secret_key
-
-        # Admin user
-        values['airflowUser'] = {
-            'username':  args.admin_username,
-            'password':  admin_password,
-            'email':     args.admin_email,
-            'firstname': args.admin_firstname,
-            'lastname':  args.admin_lastname,
-            'role':      'Admin',
-        }
-
-        # Webserver replicas
-        values.setdefault('webserver', {})['replicas'] = args.webserver_replicas
-
-        # Git-sync DAGs
-        if args.git_repo:
-            git_sync = {
-                'enabled': True,
-                'repo': args.git_repo,
-                'branch': args.git_branch,
-                'subPath': args.git_subpath,
-                'period': f'{args.git_sync_interval}s',
-            }
-            if args.git_credentials_secret:
-                git_sync['credentialsSecret'] = args.git_credentials_secret
-            values['dags'] = {'gitSync': git_sync}
-
-        # Env vars: plain + connection URIs merged together
-        env_list = [{'name': k, 'value': v} for k, v in args.env.items()]
-        for conn_id, uri in zip(conn_ids, conn_uris):
-            env_list.append({
-                'name': f'AIRFLOW_CONN_{conn_id.upper()}',
-                'value': uri,
-            })
-        if env_list:
-            values['env'] = env_list
-
-        # Secrets mounted as env vars
-        if args.env_secrets:
-            values['extraEnvFrom'] = [
-                {'secretRef': {'name': s}} for s in args.env_secrets
-            ]
-
-        # Ingress — Airflow 3.x uses apiServer instead of web
-        if args.ingress_enabled and args.ingress_domain:
-            values['ingress'] = {
-                'apiServer': {
-                    'enabled': True,
-                    'ingressClassName': args.ingress_class_name,
-                    'hosts': [{'name': f'airflow.{args.ingress_domain}'}],
-                }
-            }
-
-        return self._deep_merge(values, args.extra_values)
-
-    @staticmethod
-    def _deep_merge(base: dict, override: dict) -> dict:
-        result = base.copy()
-        for key, value in override.items():
-            if key in result and isinstance(result[key], dict) and isinstance(value, dict):
-                result[key] = Airflow._deep_merge(result[key], value)
-            else:
-                result[key] = value
-        return result

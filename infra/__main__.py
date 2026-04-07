@@ -550,41 +550,37 @@ trino = Trino(
         ingress_enabled=True,
         ingress_domain=domain,
         ingress_class_name='nginx',
+        catalogs=[
+            TrinoIcebergCatalogArgs(
+                name='bronze',
+                polaris_endpoint=polaris.endpoint,
+                warehouse='bronze',
+                credentials_secret=trino_credentials_secret,
+                s3_endpoint=minio.endpoint,
+                s3_access_key=credentials['minio']['user'],
+                s3_secret_key=credentials['minio']['password'],
+            ),
+            TrinoIcebergCatalogArgs(
+                name='silver',
+                polaris_endpoint=polaris.endpoint,
+                warehouse='silver',
+                credentials_secret=trino_credentials_secret,
+                s3_endpoint=minio.endpoint,
+                s3_access_key=credentials['minio']['user'],
+                s3_secret_key=credentials['minio']['password'],
+            ),
+            TrinoIcebergCatalogArgs(
+                name='gold',
+                polaris_endpoint=polaris.endpoint,
+                warehouse='gold',
+                credentials_secret=trino_credentials_secret,
+                s3_endpoint=minio.endpoint,
+                s3_access_key=credentials['minio']['user'],
+                s3_secret_key=credentials['minio']['password'],
+            ),
+        ],
     ),
     opts=pulumi.ResourceOptions(depends_on=[polaris_bootstrap, minio, polaris_principals]),
-)
-
-trino.create_catalogs(
-    f'catalogs-{project_name}-{env}',
-    [
-        TrinoIcebergCatalogArgs(
-            name='bronze',
-            polaris_endpoint=polaris.endpoint,
-            warehouse='bronze',
-            credentials_secret=trino_credentials_secret,
-            s3_endpoint=minio.endpoint,
-            s3_access_key=credentials['minio']['user'],
-            s3_secret_key=credentials['minio']['password'],
-        ),
-        TrinoIcebergCatalogArgs(
-            name='silver',
-            polaris_endpoint=polaris.endpoint,
-            warehouse='silver',
-            credentials_secret=trino_credentials_secret,
-            s3_endpoint=minio.endpoint,
-            s3_access_key=credentials['minio']['user'],
-            s3_secret_key=credentials['minio']['password'],
-        ),
-        TrinoIcebergCatalogArgs(
-            name='gold',
-            polaris_endpoint=polaris.endpoint,
-            warehouse='gold',
-            credentials_secret=trino_credentials_secret,
-            s3_endpoint=minio.endpoint,
-            s3_access_key=credentials['minio']['user'],
-            s3_secret_key=credentials['minio']['password'],
-        ),
-    ],
 )
 
 # =============================================================================
@@ -677,6 +673,18 @@ airflow = Airflow(
         ingress_enabled=True,
         ingress_domain=domain,
         ingress_class_name='nginx',
+        env={
+            # Kafka
+            'KAFKA_BOOTSTRAP_SERVERS': kafka.bootstrap_servers,
+            # MinIO / S3
+            'S3_ENDPOINT':   minio.endpoint,
+            'S3_ACCESS_KEY': credentials['minio']['user'],
+            'S3_SECRET_KEY': credentials['minio']['password'],
+            # Polaris
+            'POLARIS_ENDPOINT': polaris.endpoint,
+        },
+        # Mounts CLIENT_ID and CLIENT_SECRET from the Polaris spark principal secret
+        env_secrets=[spark_credentials_secret],
         connections=[
             AirflowConnectionArgs(
                 conn_id='spark_default',

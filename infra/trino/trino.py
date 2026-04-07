@@ -1,4 +1,29 @@
-'''Reusable Trino component for Kubernetes using the trinodb/trino Helm chart.'''
+'''
+Trino on Kubernetes — trinodb/trino Helm chart.
+
+Deploys a Trino coordinator + workers with Iceberg REST catalogs backed by a Polaris
+endpoint. Credentials (CLIENT_ID / CLIENT_SECRET) are sourced from K8s Secrets via
+Trino's ${ENV:VAR} interpolation — they never appear in Helm values or Pulumi state.
+
+Example:
+    trino = Trino('trino', TrinoArgs(
+        namespace=ns.metadata.name,
+        workers=2,
+        ingress_enabled=True,
+        ingress_domain='k8lh.local',
+        catalogs=[
+            TrinoIcebergCatalogArgs(
+                name='bronze',
+                polaris_endpoint=polaris.endpoint,
+                warehouse='bronze',
+                credentials_secret='polaris-trino-credentials',
+                s3_endpoint=minio.endpoint,
+                s3_access_key='minioadmin',
+                s3_secret_key=minio_password,
+            ),
+        ],
+    ))
+'''
 
 import json
 from dataclasses import dataclass, field
@@ -9,8 +34,18 @@ import pulumi
 from pulumi import Input, Output
 from pulumi_kubernetes.helm.v3 import Chart, ChartOpts, FetchOpts
 
-# Config directory for templates
 CONFIG_DIR = Path(__file__).parent.parent / 'config'
+
+
+def _deep_merge(base: dict, override: dict) -> dict:
+    '''Recursively merge override into base, with override taking precedence.'''
+    result = base.copy()
+    for key, value in override.items():
+        if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+            result[key] = _deep_merge(result[key], value)
+        else:
+            result[key] = value
+    return result
 
 
 @dataclass
@@ -18,48 +53,48 @@ class TrinoIcebergCatalogArgs:
     '''Configuration for a Trino Iceberg catalog backed by a Polaris REST endpoint.'''
 
     name: str
-    '''Catalog name as it will appear in Trino (e.g. 'bronze').'''
+    '''Catalog name as it appears in Trino SQL (e.g. "bronze").'''
 
     polaris_endpoint: Input[str]
     '''Base URL of the Polaris service (e.g. http://polaris:8181). Accepts a Pulumi Output.'''
 
     warehouse: str
-    '''Catalog name in Polaris to use as the Iceberg warehouse.'''
-
-    client_id: Input[str] = 'root'
-    '''
-    OAuth2 client ID for authenticating with Polaris. Accepts a Pulumi Output.
-    Ignored when credentials_secret is set.
-    '''
-
-    client_secret: Input[str] = 'root'
-    '''
-    OAuth2 client secret for authenticating with Polaris. Accepts a Pulumi Output (secret).
-    Ignored when credentials_secret is set.
-    '''
-
-    credentials_secret: Optional[str] = None
-    '''
-    Name of a Kubernetes Secret containing 'client-id' and 'client-secret' keys.
-    When set, credentials are read from env vars at pod startup (via ${ENV:VAR} in catalog
-    properties) instead of being embedded inline in the Helm values. Use this with
-    Polaris principals whose credentials were stored via PrincipalArgs.credentials_secret_name.
-    '''
+    '''Catalog name in Polaris used as the Iceberg warehouse.'''
 
     s3_endpoint: Input[str] = ''
-    '''S3-compatible storage endpoint (e.g. http://minio:9000). Accepts a Pulumi Output.'''
+    '''S3-compatible storage endpoint. Accepts a Pulumi Output.'''
 
     s3_access_key: Input[str] = ''
     '''S3 access key. Accepts a Pulumi Output.'''
 
     s3_secret_key: Input[str] = ''
-    '''S3 secret key. Accepts a Pulumi Output (secret).'''
+    '''S3 secret key. Accepts a Pulumi secret Output.'''
 
     s3_path_style_access: bool = True
     '''Use path-style S3 access (required for MinIO).'''
 
     s3_region: str = 'us-east-1'
-    '''S3 region (can be any value for MinIO).'''
+    '''S3 region (any value works for MinIO).'''
+
+    client_id: Input[str] = 'root'
+    '''
+    OAuth2 client ID for Polaris authentication. Accepts a Pulumi Output.
+    Ignored when credentials_secret is set — use that instead for production.
+    '''
+
+    client_secret: Input[str] = 'root'
+    '''
+    OAuth2 client secret. Accepts a Pulumi secret Output.
+    Ignored when credentials_secret is set.
+    '''
+
+    credentials_secret: Optional[str] = None
+    '''
+    Name of a K8s Secret containing CLIENT_ID and CLIENT_SECRET keys.
+    When set, credentials are read from env vars at pod startup via Trino's
+    ${ENV:VAR} interpolation — they never appear in Helm values or state.
+    Use this with secrets created by polaris.create_principals().
+    '''
 
 
 @dataclass
@@ -70,16 +105,16 @@ class TrinoAutoscalingArgs:
     '''Enable the Horizontal Pod Autoscaler for workers.'''
 
     min_replicas: int = 1
-    '''Minimum number of worker replicas.'''
+    '''Minimum worker replicas.'''
 
     max_replicas: int = 10
-    '''Maximum number of worker replicas.'''
+    '''Maximum worker replicas.'''
 
     target_cpu_utilization: Optional[int] = 70
-    '''Target CPU utilization percentage. Set to None to omit.'''
+    '''Target CPU utilization percentage. None omits this metric.'''
 
     target_memory_utilization: Optional[int] = None
-    '''Target memory utilization percentage. Set to None to omit.'''
+    '''Target memory utilization percentage. None omits this metric.'''
 
 
 @dataclass
@@ -90,7 +125,7 @@ class TrinoArgs:
     '''Kubernetes namespace to deploy Trino into (must already exist).'''
 
     release_name: Optional[str] = None
-    '''Helm release name (controls K8s resource names). If not set, uses the Pulumi resource name.'''
+    '''Helm release name — controls K8s resource names. Defaults to the Pulumi resource name.'''
 
     chart_version: str = '1.42.1'
     '''Version of the trinodb/trino Helm chart.'''
@@ -99,78 +134,73 @@ class TrinoArgs:
     '''Number of Trino worker replicas.'''
 
     coordinator_heap: str = '1G'
-    '''JVM max heap size for the coordinator (e.g. '2G').'''
+    '''JVM max heap size for the coordinator (e.g. "2G").'''
 
     worker_heap: str = '1G'
-    '''JVM max heap size for each worker (e.g. '2G').'''
+    '''JVM max heap size for each worker.'''
 
     coordinator_resources: dict = field(default_factory=lambda: {
         'requests': {'cpu': '500m',  'memory': '1Gi'},
         'limits':   {'cpu': '1000m', 'memory': '2Gi'},
     })
-    '''Resource requests and limits for the Trino coordinator pod.'''
+    '''CPU and memory requests/limits for the coordinator pod.'''
 
     worker_resources: dict = field(default_factory=lambda: {
         'requests': {'cpu': '500m',  'memory': '1Gi'},
         'limits':   {'cpu': '1000m', 'memory': '2Gi'},
     })
-    '''Resource requests and limits for Trino worker pods.'''
+    '''CPU and memory requests/limits for worker pods.'''
 
     ingress_enabled: bool = False
-    '''Enable Ingress for external access to the Trino UI and JDBC endpoint.'''
+    '''Create an Ingress for external access to the Trino UI and JDBC endpoint.'''
 
     ingress_domain: Optional[str] = None
-    '''Domain for Ingress (e.g. 'k8lh.local'). Creates trino.<domain>.'''
+    '''Base domain. Creates trino.<domain>.'''
 
     ingress_class_name: str = 'nginx'
-    '''Ingress class name (e.g. 'nginx', 'traefik').'''
+    '''Ingress class name.'''
 
     ingress_annotations: Optional[dict] = None
-    '''Additional annotations for the Ingress resource.'''
+    '''Extra Ingress annotations.'''
 
-    autoscaling: Optional['TrinoAutoscalingArgs'] = None
-    '''HPA configuration for worker pods. None disables autoscaling.'''
+    autoscaling: Optional[TrinoAutoscalingArgs] = None
+    '''HPA configuration for workers. None disables autoscaling.'''
+
+    catalogs: List[TrinoIcebergCatalogArgs] = field(default_factory=list)
+    '''Iceberg REST catalogs to register, each backed by a Polaris endpoint.'''
 
     extra_values: dict = field(default_factory=dict)
-    '''Additional Helm values to pass to the chart.'''
+    '''Additional Helm values deep-merged over the base config.'''
 
 
 class Trino(pulumi.ComponentResource):
     '''
-    A reusable Pulumi component for deploying Trino to Kubernetes using Helm.
+    Deploys Trino to Kubernetes using the official trinodb/trino Helm chart.
 
-    Trino is a distributed SQL query engine. This component deploys the coordinator
-    and worker pods and exposes a create_catalogs() method for registering Iceberg
-    catalogs backed by a Polaris REST endpoint.
+    Pass catalogs directly via TrinoArgs.catalogs — credentials are sourced from
+    K8s Secrets via Trino's ${ENV:VAR} syntax, never embedded in chart values.
 
-    Catalogs are registered via create_catalogs() and compiled into the Helm chart
-    values before deployment. Call create_catalogs() immediately after constructing
-    the Trino instance, before pulumi up runs.
+    Outputs:
+        namespace — Kubernetes namespace
+        endpoint  — Internal cluster URL (http://<release>.<ns>.svc.cluster.local:8080)
+        ui_url    — External URL if ingress enabled, else same as endpoint
 
     Example:
-        ```python
-        from trino import Trino, TrinoArgs, TrinoIcebergCatalogArgs
-
-        trino = Trino('my-trino', TrinoArgs(
-            namespace='data',
+        trino = Trino('trino', TrinoArgs(
+            namespace=ns.metadata.name,
             workers=2,
-            ingress_enabled=True,
-            ingress_domain='k8lh.local',
+            catalogs=[
+                TrinoIcebergCatalogArgs(
+                    name='bronze',
+                    polaris_endpoint=polaris.endpoint,
+                    warehouse='bronze',
+                    credentials_secret='polaris-trino-credentials',
+                    s3_endpoint=minio.endpoint,
+                    s3_access_key='minioadmin',
+                    s3_secret_key=minio_password,
+                ),
+            ],
         ))
-
-        trino.create_catalogs('trino-catalogs', [
-            TrinoIcebergCatalogArgs(
-                name='bronze',
-                polaris_endpoint=polaris.endpoint,
-                warehouse='bronze',
-                client_id='root',
-                client_secret='root',
-                s3_endpoint=minio.endpoint,
-                s3_access_key='minioadmin',
-                s3_secret_key=minio_password,
-            ),
-        ])
-        ```
     '''
 
     def __init__(
@@ -182,20 +212,86 @@ class Trino(pulumi.ComponentResource):
         super().__init__('k8lh:trino:Trino', name, {}, opts)
 
         args = args or TrinoArgs()
-        self._args = args
-        self._name = name
         self._release_name = args.release_name or name
         self._namespace = Output.from_input(args.namespace)
 
-        # Accumulator for catalogs registered via create_catalogs().
-        # Populated before Pulumi resolves the values Output (all Python runs first).
-        self._catalog_list: List[TrinoIcebergCatalogArgs] = []
+        # Build the static portion of the Helm values synchronously.
+        v = json.loads((CONFIG_DIR / 'helm/helm_values_trino.json').read_text())
+        v['fullnameOverride']                  = self._release_name
+        v['server']['workers']                 = args.workers
+        v['coordinator']['jvm']['maxHeapSize'] = args.coordinator_heap
+        v['coordinator']['resources']          = args.coordinator_resources
+        v['worker']['jvm']['maxHeapSize']      = args.worker_heap
+        v['worker']['resources']               = args.worker_resources
 
-        # Values are built lazily so that create_catalogs() calls made after __init__
-        # are captured before Pulumi resolves the Output.
-        values = Output.from_input(True).apply(
-            lambda _: self._resolve_values(args)
-        )
+        if args.autoscaling:
+            a = args.autoscaling
+            hpa = {
+                'enabled':                        a.enabled,
+                'minReplicas':                    a.min_replicas,
+                'maxReplicas':                    a.max_replicas,
+                'targetCPUUtilizationPercentage': a.target_cpu_utilization,
+            }
+            if a.target_memory_utilization is not None:
+                hpa['targetMemoryUtilizationPercentage'] = a.target_memory_utilization
+            v['worker']['autoscaling'] = hpa
+
+        if args.ingress_enabled and args.ingress_domain:
+            v['ingress'] = {
+                'enabled':     True,
+                'className':   args.ingress_class_name,
+                'annotations': args.ingress_annotations or {},
+                'hosts': [{'host': f'trino.{args.ingress_domain}', 'paths': [{'path': '/', 'pathType': 'ImplementationSpecific'}]}],
+                'tls': [],
+            }
+
+        v = _deep_merge(v, args.extra_values)
+
+        if not args.catalogs:
+            values = Output.from_input(v)
+        else:
+            # Build each catalog's .properties content as an Output[str], resolving
+            # any Pulumi Outputs (endpoints, keys) per catalog independently.
+            env_from_secrets = []
+            catalog_outputs  = {}
+            for cat in args.catalogs:
+                if cat.credentials_secret:
+                    pfx  = f'TRINO_{cat.name.upper()}'
+                    cred = Output.from_input(f'${{ENV:{pfx}_CLIENT_ID}}:${{ENV:{pfx}_CLIENT_SECRET}}')
+                    env_from_secrets.append({'secretRef': {'name': cat.credentials_secret}, 'prefix': f'{pfx}_'})
+                else:
+                    cred = Output.all(
+                        cid=Output.from_input(cat.client_id),
+                        sec=Output.from_input(cat.client_secret),
+                    ).apply(lambda r: f'{r["cid"]}:{r["sec"]}')
+
+                catalog_outputs[cat.name] = Output.all(
+                    ep=cat.polaris_endpoint,
+                    s3ep=cat.s3_endpoint,
+                    s3k=cat.s3_access_key,
+                    s3s=cat.s3_secret_key,
+                    cred=cred,
+                ).apply(lambda r, cat=cat: '\n'.join([
+                    'connector.name=iceberg',
+                    'iceberg.catalog.type=rest',
+                    f'iceberg.rest-catalog.uri={r["ep"]}/api/catalog',
+                    f'iceberg.rest-catalog.warehouse={cat.warehouse}',
+                    'iceberg.rest-catalog.security=OAUTH2',
+                    f'iceberg.rest-catalog.oauth2.credential={r["cred"]}',
+                    'fs.native-s3.enabled=true',
+                    f's3.endpoint={r["s3ep"]}',
+                    f's3.path-style-access={str(cat.s3_path_style_access).lower()}',
+                    f's3.aws-access-key={r["s3k"]}',
+                    f's3.aws-secret-key={r["s3s"]}',
+                    f's3.region={cat.s3_region}',
+                ]) + '\n')
+
+            # Merge resolved catalog configs into the values dict.
+            values = Output.all(**catalog_outputs).apply(lambda catalogs: {
+                **v,
+                'catalogs': catalogs,
+                **({'envFrom': (v.get('envFrom') or []) + env_from_secrets} if env_from_secrets else {}),
+            })
 
         self.chart = Chart(
             f'{name}-chart',
@@ -203,186 +299,25 @@ class Trino(pulumi.ComponentResource):
                 chart='trino',
                 version=args.chart_version,
                 namespace=self._namespace,
-                fetch_opts=FetchOpts(
-                    repo='https://trinodb.github.io/charts',
-                ),
+                fetch_opts=FetchOpts(repo='https://trinodb.github.io/charts'),
                 values=values,
             ),
             opts=pulumi.ResourceOptions(parent=self),
         )
 
         self.namespace = self._namespace
-        self.endpoint = pulumi.Output.concat(
+        self.endpoint = Output.concat(
             'http://', self._release_name, '.', self._namespace,
-            '.svc.cluster.local:8080'
+            '.svc.cluster.local:8080',
         )
-
-        if args.ingress_enabled and args.ingress_domain:
-            self.host = f'trino.{args.ingress_domain}'
-            self.ui_url = Output.from_input(f'http://{self.host}')
-        else:
-            self.ui_url = self.endpoint
+        self.ui_url = (
+            Output.from_input(f'http://trino.{args.ingress_domain}')
+            if args.ingress_enabled and args.ingress_domain
+            else self.endpoint
+        )
 
         self.register_outputs({
             'namespace': self.namespace,
-            'endpoint': self.endpoint,
-            'ui_url': self.ui_url,
+            'endpoint':  self.endpoint,
+            'ui_url':    self.ui_url,
         })
-
-    def create_catalogs(
-        self,
-        name: str,
-        catalogs: List[TrinoIcebergCatalogArgs],
-        opts: pulumi.ResourceOptions = None,
-    ) -> 'Trino':
-        '''
-        Register one or more Iceberg REST catalogs backed by Polaris.
-
-        Must be called before pulumi up — catalogs are compiled into the Helm
-        chart values at deployment time, not injected post-deployment.
-
-        Args:
-            name: Logical name for this set of catalogs (for documentation only).
-            catalogs: List of catalog configurations.
-            opts: Unused — present for API consistency with other components.
-
-        Returns:
-            self, for method chaining.
-
-        Example:
-            ```python
-            trino.create_catalogs('lakehouse-catalogs', [
-                TrinoIcebergCatalogArgs(
-                    name='bronze',
-                    polaris_endpoint=polaris.endpoint,
-                    warehouse='bronze',
-                    client_id='root',
-                    client_secret='root',
-                    s3_endpoint=minio.endpoint,
-                    s3_access_key=minio_user,
-                    s3_secret_key=minio_password,
-                ),
-            ])
-            ```
-        '''
-        self._catalog_list.extend(catalogs)
-        return self
-
-    def _resolve_values(self, args: TrinoArgs) -> Output:
-        '''
-        Build an Output[dict] of Helm values with all registered catalogs resolved.
-
-        Called lazily by Pulumi after all Python code has run, so self._catalog_list
-        is fully populated with any create_catalogs() calls that followed __init__.
-        '''
-        if not self._catalog_list:
-            return Output.from_input(self._build_values(args, {}))
-
-        # Collect every Input[str] from every catalog so they can be resolved together.
-        all_inputs = {}
-        for i, cat in enumerate(self._catalog_list):
-            all_inputs[f'c{i}_endpoint'] = cat.polaris_endpoint
-            all_inputs[f'c{i}_s3ep']     = cat.s3_endpoint
-            all_inputs[f'c{i}_s3key']    = cat.s3_access_key
-            all_inputs[f'c{i}_s3sec']    = cat.s3_secret_key
-            # Only resolve inline credentials when not sourcing from a K8s secret
-            if not cat.credentials_secret:
-                all_inputs[f'c{i}_id']     = Output.from_input(cat.client_id)
-                all_inputs[f'c{i}_secret'] = Output.from_input(cat.client_secret)
-
-        return pulumi.Output.all(**all_inputs).apply(
-            lambda r: self._build_values(args, r)
-        )
-
-    def _build_values(self, args: TrinoArgs, resolved: dict) -> dict:
-        '''Build Helm chart values from TrinoArgs and the resolved catalog inputs.'''
-        values = json.loads((CONFIG_DIR / 'helm/helm_values_trino.json').read_text())
-
-        values['fullnameOverride'] = self._release_name
-        values['server']['workers'] = args.workers
-        values['coordinator']['jvm']['maxHeapSize'] = args.coordinator_heap
-        values['coordinator']['resources'] = args.coordinator_resources
-        values['worker']['jvm']['maxHeapSize'] = args.worker_heap
-        values['worker']['resources'] = args.worker_resources
-
-        # Build catalog properties strings
-        catalog_configs = {}
-        # Collect env var sources from K8s secrets (one entry per catalog that uses a secret)
-        env_from_secrets = []
-
-        for i, cat in enumerate(self._catalog_list):
-            endpoint = resolved[f'c{i}_endpoint']
-            s3ep     = resolved[f'c{i}_s3ep']
-            s3key    = resolved[f'c{i}_s3key']
-            s3sec    = resolved[f'c{i}_s3sec']
-
-            if cat.credentials_secret:
-                # Use Trino's ${ENV:VAR} interpolation — credentials stay out of Helm values
-                env_prefix = f'TRINO_{cat.name.upper()}'
-                credential_line = f'${{ENV:{env_prefix}_CLIENT_ID}}:${{ENV:{env_prefix}_CLIENT_SECRET}}'
-                env_from_secrets.append({
-                    'secretRef': {'name': cat.credentials_secret},
-                    'prefix': f'{env_prefix}_',
-                })
-            else:
-                credential_line = f'{resolved[f"c{i}_id"]}:{resolved[f"c{i}_secret"]}'
-
-            catalog_configs[cat.name] = '\n'.join([
-                'connector.name=iceberg',
-                'iceberg.catalog.type=rest',
-                f'iceberg.rest-catalog.uri={endpoint}/api/catalog',
-                f'iceberg.rest-catalog.warehouse={cat.warehouse}',
-                'iceberg.rest-catalog.security=OAUTH2',
-                f'iceberg.rest-catalog.oauth2.credential={credential_line}',
-                'fs.native-s3.enabled=true',
-                f's3.endpoint={s3ep}',
-                f's3.path-style-access={str(cat.s3_path_style_access).lower()}',
-                f's3.aws-access-key={s3key}',
-                f's3.aws-secret-key={s3sec}',
-                f's3.region={cat.s3_region}',
-            ]) + '\n'
-
-        values['catalogs'] = catalog_configs
-
-        # Mount K8s secrets as env vars on all pods (coordinator + worker)
-        if env_from_secrets:
-            values.setdefault('envFrom', [])
-            values['envFrom'].extend(env_from_secrets)
-
-        if args.autoscaling:
-            a = args.autoscaling
-            hpa: dict = {
-                'enabled': a.enabled,
-                'minReplicas': a.min_replicas,
-                'maxReplicas': a.max_replicas,
-                'targetCPUUtilizationPercentage': a.target_cpu_utilization,
-            }
-            if a.target_memory_utilization is not None:
-                hpa['targetMemoryUtilizationPercentage'] = a.target_memory_utilization
-            values['worker']['autoscaling'] = hpa
-
-        if args.ingress_enabled and args.ingress_domain:
-            values['ingress'] = {
-                'enabled': True,
-                'className': args.ingress_class_name,
-                'annotations': args.ingress_annotations or {},
-                'hosts': [{
-                    'host': f'trino.{args.ingress_domain}',
-                    'paths': [{'path': '/', 'pathType': 'ImplementationSpecific'}],
-                }],
-                'tls': [],
-            }
-
-        values = self._deep_merge(values, args.extra_values)
-        return values
-
-    @staticmethod
-    def _deep_merge(base: dict, override: dict) -> dict:
-        '''Deep merge two dictionaries, with override taking precedence.'''
-        result = base.copy()
-        for key, value in override.items():
-            if key in result and isinstance(result[key], dict) and isinstance(value, dict):
-                result[key] = Trino._deep_merge(result[key], value)
-            else:
-                result[key] = value
-        return result
