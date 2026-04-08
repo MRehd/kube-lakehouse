@@ -283,6 +283,11 @@ class Keda(pulumi.ComponentResource):
                 )],
             ))
         '''
+        triggers_meta = [
+            {k: Output.from_input(v) for k, v in trigger.metadata.items()}
+            for trigger in args.triggers
+        ]
+
         resource_opts = pulumi.ResourceOptions(parent=self, depends_on=[self.chart])
         if opts:
             resource_opts = pulumi.ResourceOptions.merge(resource_opts, opts)
@@ -303,11 +308,8 @@ class Keda(pulumi.ComponentResource):
                 'pollingInterval': args.polling_interval,
                 'cooldownPeriod':  args.cooldown_period,
                 'triggers': [
-                    {
-                        'type':     trigger.type,
-                        'metadata': {k: Output.from_input(v) for k, v in trigger.metadata.items()},
-                    }
-                    for trigger in args.triggers
+                    {'type': trigger.type, 'metadata': meta}
+                    for trigger, meta in zip(args.triggers, triggers_meta)
                 ],
             },
             opts=resource_opts,

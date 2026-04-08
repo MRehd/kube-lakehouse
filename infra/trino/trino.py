@@ -204,7 +204,13 @@ class Trino(pulumi.ComponentResource):
 
         args = args or TrinoArgs()
         self._release_name = args.release_name or name
-        self._namespace = Output.from_input(args.namespace)
+        self._namespace    = Output.from_input(args.namespace)
+        cat_endpoints  = [Output.from_input(c.polaris_endpoint) for c in args.catalogs]
+        cat_s3eps      = [Output.from_input(c.s3_endpoint)      for c in args.catalogs]
+        cat_s3keys     = [Output.from_input(c.s3_access_key)    for c in args.catalogs]
+        cat_s3secs     = [Output.from_input(c.s3_secret_key)    for c in args.catalogs]
+        cat_client_ids = [Output.from_input(c.client_id)        for c in args.catalogs]
+        cat_client_secs= [Output.from_input(c.client_secret)    for c in args.catalogs]
 
         # Build the static portion of the Helm values synchronously.
         v = json.loads((CONFIG_DIR / 'helm/helm_values_trino.json').read_text())
@@ -245,22 +251,19 @@ class Trino(pulumi.ComponentResource):
             # any Pulumi Outputs (endpoints, keys) per catalog independently.
             env_from_secrets = []
             catalog_outputs  = {}
-            for cat in args.catalogs:
+            for i, cat in enumerate(args.catalogs):
                 if cat.credentials_secret:
                     pfx  = f'TRINO_{cat.name.upper()}'
-                    cred = Output.from_input(f'${{ENV:{pfx}_CLIENT_ID}}:${{ENV:{pfx}_CLIENT_SECRET}}')
+                    cred = f'${{ENV:{pfx}_CLIENT_ID}}:${{ENV:{pfx}_CLIENT_SECRET}}'
                     env_from_secrets.append({'secretRef': {'name': cat.credentials_secret}, 'prefix': f'{pfx}_'})
                 else:
-                    cred = Output.all(
-                        cid=Output.from_input(cat.client_id),
-                        sec=Output.from_input(cat.client_secret),
-                    ).apply(lambda r: f'{r["cid"]}:{r["sec"]}')
+                    cred = Output.concat(cat_client_ids[i], ':', cat_client_secs[i])
 
                 catalog_outputs[cat.name] = Output.all(
-                    ep=cat.polaris_endpoint,
-                    s3ep=cat.s3_endpoint,
-                    s3k=cat.s3_access_key,
-                    s3s=cat.s3_secret_key,
+                    ep=cat_endpoints[i],
+                    s3ep=cat_s3eps[i],
+                    s3k=cat_s3keys[i],
+                    s3s=cat_s3secs[i],
                     cred=cred,
                 ).apply(lambda r, cat=cat: '\n'.join([
                     'connector.name=iceberg',

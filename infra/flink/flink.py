@@ -291,6 +291,11 @@ class Flink(pulumi.ComponentResource):
                 ],
             ))
         '''
+        cat_endpoints = [Output.from_input(c.polaris_endpoint) for c in args.iceberg_catalogs]
+        cat_s3eps     = [Output.from_input(c.s3_endpoint)      for c in args.iceberg_catalogs]
+        cat_s3keys    = [Output.from_input(c.s3_access_key)    for c in args.iceberg_catalogs]
+        cat_s3secs    = [Output.from_input(c.s3_secret_key)    for c in args.iceberg_catalogs]
+
         spec = json.loads((CONFIG_DIR / 'resources/flink_deployment_spec.json').read_text())
 
         spec['flinkVersion']                        = args.flink_version
@@ -307,17 +312,17 @@ class Flink(pulumi.ComponentResource):
         # Credentials come from per-catalog K8s Secrets mounted with a
         # POLARIS_<CATALOG>_ prefix — Flink resolves ${ENV:POLARIS_BRONZE_CLIENT_ID}.
         flink_config: Dict[str, Input[str]] = {'pipeline.name': args.job_name}
-        for cat in args.iceberg_catalogs:
+        for i, cat in enumerate(args.iceberg_catalogs):
             prefix     = f'table.catalog.{cat.name}'
             env_prefix = f'POLARIS_{cat.name.upper()}_'
             flink_config[f'{prefix}.type']                 = 'iceberg'
             flink_config[f'{prefix}.catalog-type']         = 'rest'
-            flink_config[f'{prefix}.uri']                  = Output.concat(cat.polaris_endpoint, '/api/catalog')
+            flink_config[f'{prefix}.uri']                  = Output.concat(cat_endpoints[i], '/api/catalog')
             flink_config[f'{prefix}.warehouse']            = cat.warehouse
             flink_config[f'{prefix}.credential']           = f'${{ENV:{env_prefix}CLIENT_ID}}:${{ENV:{env_prefix}CLIENT_SECRET}}'
-            flink_config[f'{prefix}.s3.endpoint']          = Output.from_input(cat.s3_endpoint)
-            flink_config[f'{prefix}.s3.access-key']        = Output.from_input(cat.s3_access_key)
-            flink_config[f'{prefix}.s3.secret-key']        = Output.from_input(cat.s3_secret_key)
+            flink_config[f'{prefix}.s3.endpoint']          = cat_s3eps[i]
+            flink_config[f'{prefix}.s3.access-key']        = cat_s3keys[i]
+            flink_config[f'{prefix}.s3.secret-key']        = cat_s3secs[i]
             flink_config[f'{prefix}.s3.path-style-access'] = str(cat.s3_path_style_access).lower()
 
         if args.autoscaling_enabled:

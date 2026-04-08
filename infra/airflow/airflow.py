@@ -42,6 +42,7 @@ from pathlib import Path
 from typing import Optional
 
 import json
+import yaml
 import pulumi
 from pulumi import Input, Output
 from pulumi_kubernetes.helm.v3 import Chart, ChartOpts, FetchOpts
@@ -260,7 +261,7 @@ class Airflow(pulumi.ComponentResource):
             v['env'] = env_list
 
         if args.env_secrets:
-            v['extraEnvFrom'] = [{'secretRef': {'name': s}} for s in args.env_secrets]
+            v['extraEnvFrom'] = yaml.dump([{'secretRef': {'name': s}} for s in args.env_secrets])
 
         if args.ingress_enabled and args.ingress_domain:
             v['ingress'] = {'apiServer': {

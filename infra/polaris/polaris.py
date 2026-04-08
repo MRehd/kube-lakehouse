@@ -485,14 +485,18 @@ class Polaris(pulumi.ComponentResource):
                 ),
             ], opts=pulumi.ResourceOptions(depends_on=[bootstrap]))
         '''
+        cat_endpoints = {c.name: Output.from_input(c.s3_endpoint)   for c in catalogs}
+        cat_keys      = {c.name: Output.from_input(c.s3_access_key) for c in catalogs}
+        cat_secs      = {c.name: Output.from_input(c.s3_secret_key) for c in catalogs}
+
         script_template = (CONFIG_DIR / 'scripts/create_catalogs.sh').read_text()
 
-        # Gather all Output[str] values from all catalogs keyed by catalog name
-        inputs = {'secret': self._root_client_secret}
-        for c in catalogs:
-            inputs[f'{c.name}_endpoint']   = c.s3_endpoint
-            inputs[f'{c.name}_access_key'] = c.s3_access_key
-            inputs[f'{c.name}_secret_key'] = c.s3_secret_key
+        inputs = {
+            'secret':                     self._root_client_secret,
+            **{f'{n}_endpoint':   v for n, v in cat_endpoints.items()},
+            **{f'{n}_access_key': v for n, v in cat_keys.items()},
+            **{f'{n}_secret_key': v for n, v in cat_secs.items()},
+        }
 
         def build_script(r: dict) -> str:
             def make_call(c: CatalogArgs) -> str:
