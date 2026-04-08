@@ -23,18 +23,9 @@ import pulumi
 from pulumi import Input, Output
 from pulumi_kubernetes.helm.v3 import Chart, ChartOpts, FetchOpts
 
+from config.utils.utils import _deep_merge
+
 CONFIG_DIR = Path(__file__).parent.parent / 'config'
-
-
-def _deep_merge(base: dict, override: dict) -> dict:
-    '''Recursively merge override into base, with override taking precedence.'''
-    result = base.copy()
-    for key, value in override.items():
-        if key in result and isinstance(result[key], dict) and isinstance(value, dict):
-            result[key] = _deep_merge(result[key], value)
-        else:
-            result[key] = value
-    return result
 
 
 @dataclass
@@ -119,18 +110,21 @@ class KafkaUi(pulumi.ComponentResource):
         super().__init__('k8lh:kafkaui:KafkaUi', name, {}, opts)
 
         args = args or KafkaUiArgs()
-        release_name = args.release_name or name
-        self._namespace = Output.from_input(args.namespace)
-        bootstrap_servers = Output.from_input(args.bootstrap_servers)
+        self._namespace       = Output.from_input(args.namespace)
+        bootstrap_servers     = Output.from_input(args.bootstrap_servers)
+        release_name          = args.release_name or name
 
-        # Build base values synchronously — everything except bootstrap_servers
-        base = json.loads((CONFIG_DIR / 'helm/helm_values_kafka_ui.json').read_text())
-        base['fullnameOverride'] = release_name
-        base['replicaCount']     = args.replica_count
-        base['resources']        = args.resources
-        base['service']['port']  = args.service_port
+        values = json.loads((CONFIG_DIR / 'helm/helm_values_kafka_ui.json').read_text())
+        values['fullnameOverride'] = release_name
+        values['replicaCount']     = args.replica_count
+        values['resources']        = args.resources
+        values['service']['port']  = args.service_port
+        values['yamlApplicationConfig'] = {
+            'kafka': {'clusters': [{'name': args.cluster_name, 'bootstrapServers': bootstrap_servers}]},
+        }
+
         if args.ingress_enabled and args.ingress_domain:
-            base['ingress'] = {
+            values['ingress'] = {
                 'enabled':          True,
                 'ingressClassName': args.ingress_class_name,
                 'host':             f'kafka-ui.{args.ingress_domain}',
@@ -139,16 +133,6 @@ class KafkaUi(pulumi.ComponentResource):
                 'annotations':      args.ingress_annotations or {},
                 'tls':              {'enabled': False},
             }
-        base = _deep_merge(base, args.extra_values)
-
-        # Only yamlApplicationConfig.kafka.clusters depends on bootstrap_servers (an Output).
-        # Merge it in via apply() so Pulumi resolves the Output before building the final dict.
-        values = bootstrap_servers.apply(lambda bs: {
-            **base,
-            'yamlApplicationConfig': {
-                'kafka': {'clusters': [{'name': args.cluster_name, 'bootstrapServers': bs}]},
-            },
-        })
 
         self.chart = Chart(
             f'{name}-chart',
@@ -157,7 +141,7 @@ class KafkaUi(pulumi.ComponentResource):
                 version=args.chart_version,
                 namespace=self._namespace,
                 fetch_opts=FetchOpts(repo='https://provectus.github.io/kafka-ui-charts'),
-                values=values,
+                values=_deep_merge(values, args.extra_values),
             ),
             opts=pulumi.ResourceOptions(parent=self),
         )

@@ -41,18 +41,9 @@ from pulumi import Input, Output
 from pulumi_kubernetes.apiextensions import CustomResource
 from pulumi_kubernetes.helm.v3 import Chart, ChartOpts, FetchOpts
 
+from config.utils.utils import _deep_merge
+
 CONFIG_DIR = Path(__file__).parent.parent / 'config'
-
-
-def _deep_merge(base: dict, override: dict) -> dict:
-    '''Recursively merge override into base, with override taking precedence.'''
-    result = base.copy()
-    for key, value in override.items():
-        if key in result and isinstance(result[key], dict) and isinstance(value, dict):
-            result[key] = _deep_merge(result[key], value)
-        else:
-            result[key] = value
-    return result
 
 
 @dataclass
@@ -300,80 +291,63 @@ class Flink(pulumi.ComponentResource):
                 ],
             ))
         '''
-        # Gather all Input[str] values from catalog configs for joint resolution
-        all_inputs: Dict[str, Input[str]] = {}
-        for i, cat in enumerate(args.iceberg_catalogs):
-            all_inputs[f'c{i}_endpoint'] = cat.polaris_endpoint
-            all_inputs[f'c{i}_s3ep']     = cat.s3_endpoint
-            all_inputs[f'c{i}_s3key']    = cat.s3_access_key
-            all_inputs[f'c{i}_s3sec']    = cat.s3_secret_key
+        spec = json.loads((CONFIG_DIR / 'resources/flink_deployment_spec.json').read_text())
 
-        def build_spec(resolved: dict) -> dict:
-            spec = json.loads((CONFIG_DIR / 'resources/flink_deployment_spec.json').read_text())
+        spec['flinkVersion']                        = args.flink_version
+        spec['image']                               = f'{args.image}:{args.image_tag}'
+        spec['jobManager']['resource']['cpu']       = args.jobmanager_cpu
+        spec['jobManager']['resource']['memory']    = args.jobmanager_memory
+        spec['taskManager']['replicas']             = args.taskmanager_replicas
+        spec['taskManager']['resource']['cpu']      = args.taskmanager_cpu
+        spec['taskManager']['resource']['memory']   = args.taskmanager_memory
+        spec['job']['args']                         = ['-py', args.python_script]
+        spec['job']['parallelism']                  = args.parallelism
 
-            spec['flinkVersion']                        = args.flink_version
-            spec['image']                               = f'{args.image}:{args.image_tag}'
-            spec['jobManager']['resource']['cpu']       = args.jobmanager_cpu
-            spec['jobManager']['resource']['memory']    = args.jobmanager_memory
-            spec['taskManager']['replicas']             = args.taskmanager_replicas
-            spec['taskManager']['resource']['cpu']      = args.taskmanager_cpu
-            spec['taskManager']['resource']['memory']   = args.taskmanager_memory
-            spec['job']['args']                         = ['-py', args.python_script]
-            spec['job']['parallelism']                  = args.parallelism
+        # Build flinkConfiguration — catalog Input[str] values passed directly.
+        # Credentials come from per-catalog K8s Secrets mounted with a
+        # POLARIS_<CATALOG>_ prefix — Flink resolves ${ENV:POLARIS_BRONZE_CLIENT_ID}.
+        flink_config: Dict[str, Input[str]] = {'pipeline.name': args.job_name}
+        for cat in args.iceberg_catalogs:
+            prefix     = f'table.catalog.{cat.name}'
+            env_prefix = f'POLARIS_{cat.name.upper()}_'
+            flink_config[f'{prefix}.type']                 = 'iceberg'
+            flink_config[f'{prefix}.catalog-type']         = 'rest'
+            flink_config[f'{prefix}.uri']                  = Output.concat(cat.polaris_endpoint, '/api/catalog')
+            flink_config[f'{prefix}.warehouse']            = cat.warehouse
+            flink_config[f'{prefix}.credential']           = f'${{ENV:{env_prefix}CLIENT_ID}}:${{ENV:{env_prefix}CLIENT_SECRET}}'
+            flink_config[f'{prefix}.s3.endpoint']          = Output.from_input(cat.s3_endpoint)
+            flink_config[f'{prefix}.s3.access-key']        = Output.from_input(cat.s3_access_key)
+            flink_config[f'{prefix}.s3.secret-key']        = Output.from_input(cat.s3_secret_key)
+            flink_config[f'{prefix}.s3.path-style-access'] = str(cat.s3_path_style_access).lower()
 
-            # Build flinkConfiguration with catalog properties.
-            # Credentials come from per-catalog K8s Secrets mounted with a
-            # POLARIS_<CATALOG>_ prefix — Flink resolves ${ENV:POLARIS_BRONZE_CLIENT_ID}.
-            flink_config: Dict[str, str] = {'pipeline.name': args.job_name}
-            for i, cat in enumerate(args.iceberg_catalogs):
-                prefix     = f'table.catalog.{cat.name}'
-                env_prefix = f'POLARIS_{cat.name.upper()}_'
-                flink_config[f'{prefix}.type']                 = 'iceberg'
-                flink_config[f'{prefix}.catalog-type']         = 'rest'
-                flink_config[f'{prefix}.uri']                  = f'{resolved[f"c{i}_endpoint"]}/api/catalog'
-                flink_config[f'{prefix}.warehouse']            = cat.warehouse
-                flink_config[f'{prefix}.credential']           = f'${{ENV:{env_prefix}CLIENT_ID}}:${{ENV:{env_prefix}CLIENT_SECRET}}'
-                flink_config[f'{prefix}.s3.endpoint']          = resolved[f'c{i}_s3ep']
-                flink_config[f'{prefix}.s3.access-key']        = resolved[f'c{i}_s3key']
-                flink_config[f'{prefix}.s3.secret-key']        = resolved[f'c{i}_s3sec']
-                flink_config[f'{prefix}.s3.path-style-access'] = str(cat.s3_path_style_access).lower()
+        if args.autoscaling_enabled:
+            flink_config['job.autoscaler.enabled']                = 'true'
+            flink_config['job.autoscaler.target.utilization']     = str(args.autoscaling_target_utilization)
+            flink_config['job.autoscaler.metrics.window']         = args.autoscaling_metrics_window
+            flink_config['job.autoscaler.stabilization.interval'] = args.autoscaling_stabilization_interval
 
-            if args.autoscaling_enabled:
-                flink_config['job.autoscaler.enabled']                = 'true'
-                flink_config['job.autoscaler.target.utilization']     = str(args.autoscaling_target_utilization)
-                flink_config['job.autoscaler.metrics.window']         = args.autoscaling_metrics_window
-                flink_config['job.autoscaler.stabilization.interval'] = args.autoscaling_stabilization_interval
+        flink_config.update(args.extra_flink_config)
+        spec['flinkConfiguration'] = flink_config
 
-            flink_config.update(args.extra_flink_config)
-            spec['flinkConfiguration'] = flink_config
+        # Pod template: static env vars + per-catalog secret mounts (deduped)
+        env_vars = [{'name': k, 'value': v} for k, v in args.env.items()]
+        env_from = []
+        seen_secrets: set = set()
+        for cat in args.iceberg_catalogs:
+            if cat.credentials_secret not in seen_secrets:
+                env_from.append({
+                    'secretRef': {'name': cat.credentials_secret},
+                    'prefix':    f'POLARIS_{cat.name.upper()}_',
+                })
+                seen_secrets.add(cat.credentials_secret)
+        if args.credentials_secret and args.credentials_secret not in seen_secrets:
+            env_from.append({'secretRef': {'name': args.credentials_secret}})
 
-            # Pod template: static env vars + per-catalog secret mounts (deduped)
-            env_vars = [{'name': k, 'value': v} for k, v in args.env.items()]
-            env_from = []
-            seen_secrets = set()
-            for cat in args.iceberg_catalogs:
-                if cat.credentials_secret not in seen_secrets:
-                    env_from.append({
-                        'secretRef': {'name': cat.credentials_secret},
-                        'prefix':    f'POLARIS_{cat.name.upper()}_',
-                    })
-                    seen_secrets.add(cat.credentials_secret)
-            if args.credentials_secret and args.credentials_secret not in seen_secrets:
-                env_from.append({'secretRef': {'name': args.credentials_secret}})
-
-            pod_template = {'spec': {'containers': [
-                {'name': 'flink-main-container', 'env': env_vars, 'envFrom': env_from}
-            ]}}
-            spec['jobManager']['podTemplate']  = pod_template
-            spec['taskManager']['podTemplate'] = pod_template
-
-            return spec
-
-        spec = (
-            pulumi.Output.all(**all_inputs).apply(build_spec)
-            if all_inputs
-            else pulumi.Output.from_input(build_spec({}))
-        )
+        pod_template = {'spec': {'containers': [
+            {'name': 'flink-main-container', 'env': env_vars, 'envFrom': env_from}
+        ]}}
+        spec['jobManager']['podTemplate']  = pod_template
+        spec['taskManager']['podTemplate'] = pod_template
 
         resource_opts = pulumi.ResourceOptions(parent=self, depends_on=[self.chart])
         if opts:

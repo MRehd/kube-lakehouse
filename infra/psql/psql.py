@@ -33,18 +33,9 @@ from pulumi import Input, Output
 from pulumi_kubernetes.batch.v1 import Job
 from pulumi_kubernetes.helm.v3 import Chart, ChartOpts, FetchOpts
 
+from config.utils.utils import _deep_merge
+
 CONFIG_DIR = Path(__file__).parent.parent / 'config'
-
-
-def _deep_merge(base: dict, override: dict) -> dict:
-    '''Recursively merge override into base, with override taking precedence.'''
-    result = base.copy()
-    for key, value in override.items():
-        if key in result and isinstance(result[key], dict) and isinstance(value, dict):
-            result[key] = _deep_merge(result[key], value)
-        else:
-            result[key] = value
-    return result
 
 
 @dataclass
@@ -389,64 +380,50 @@ class Psql(pulumi.ComponentResource):
         if isinstance(users, UserArgs):
             users = [users]
 
-        # ── Resolve all passwords (they may be Output[str]) ───────────────────
         scripts_dir       = CONFIG_DIR / 'scripts'
         create_user_tpl   = (scripts_dir / 'create_user.sql').read_text()
         grant_connect_tpl = (scripts_dir / 'grant_connect.sql').read_text()
         grant_all_tpl     = (scripts_dir / 'grant_privileges.sql').read_text()
         grant_table_tpl   = (scripts_dir / 'grant_table.sql').read_text()
 
-        # Wrap each user as an Output so we can resolve passwords uniformly
-        resolved_user_outputs = [
-            Output.from_input(u).apply(lambda u: {
-                'name':             u.name,
-                'password':         u.password,
-                'superuser':        u.superuser,
-                'createdb':         u.createdb,
-                'createrole':       u.createrole,
-                'login':            u.login,
-                'connection_limit': u.connection_limit,
-                'valid_until':      u.valid_until,
-                'grants':           u.grants,
-            })
-            for u in users
-        ]
+        # Hoist password resolution — only Input[str] field that needs resolving
+        passwords = [Output.from_input(u.password) for u in users]
 
-        def build_script(resolved_users: list) -> str:
+        def build_script(pws: list) -> str:
             sql_parts = []
-            for user in resolved_users:
+            for user, pw in zip(users, pws):
                 options = [
-                    'SUPERUSER'   if user['superuser']  else 'NOSUPERUSER',
-                    'CREATEDB'    if user['createdb']   else 'NOCREATEDB',
-                    'CREATEROLE'  if user['createrole'] else 'NOCREATEROLE',
-                    'LOGIN'       if user['login']      else 'NOLOGIN',
-                    f"PASSWORD '{user['password'].replace(chr(39), chr(39)*2)}'",
+                    'SUPERUSER'  if user.superuser  else 'NOSUPERUSER',
+                    'CREATEDB'   if user.createdb   else 'NOCREATEDB',
+                    'CREATEROLE' if user.createrole else 'NOCREATEROLE',
+                    'LOGIN'      if user.login      else 'NOLOGIN',
+                    f"PASSWORD '{pw.replace(chr(39), chr(39)*2)}'",
                 ]
-                if user['connection_limit'] != -1:
-                    options.append(f"CONNECTION LIMIT {user['connection_limit']}")
-                if user['valid_until']:
-                    options.append(f"VALID UNTIL '{user['valid_until']}'")
+                if user.connection_limit != -1:
+                    options.append(f"CONNECTION LIMIT {user.connection_limit}")
+                if user.valid_until:
+                    options.append(f"VALID UNTIL '{user.valid_until}'")
 
                 sql_parts.append(
                     create_user_tpl
-                    .replace('{{NAME}}',    user['name'])
+                    .replace('{{NAME}}',    user.name)
                     .replace('{{OPTIONS}}', ' '.join(options))
                 )
 
-                for grant in (user['grants'] or []):
+                for grant in (user.grants or []):
                     privileges = ', '.join(grant.privileges)
                     grant_opt  = ' WITH GRANT OPTION' if grant.grant_option else ''
 
                     sql_parts.append(
                         grant_connect_tpl
                         .replace('{{DATABASE}}', grant.database)
-                        .replace('{{USERNAME}}', user['name'])
+                        .replace('{{USERNAME}}', user.name)
                     )
                     for schema in grant.schemas:
-                        template = grant_all_tpl if grant.tables == 'ALL TABLES' else grant_table_tpl
+                        template  = grant_all_tpl if grant.tables == 'ALL TABLES' else grant_table_tpl
                         privs_sql = (template
                                      .replace('{{SCHEMA}}',       schema)
-                                     .replace('{{USERNAME}}',     user['name'])
+                                     .replace('{{USERNAME}}',     user.name)
                                      .replace('{{PRIVILEGES}}',   privileges)
                                      .replace('{{GRANT_OPTION}}', grant_opt))
                         if grant.tables != 'ALL TABLES':
@@ -455,7 +432,7 @@ class Psql(pulumi.ComponentResource):
 
             return '\n'.join(sql_parts)
 
-        sql_script = pulumi.Output.all(*resolved_user_outputs).apply(build_script)
+        sql_script = Output.all(*passwords).apply(build_script)
 
         # ── Job spec ──────────────────────────────────────────────────────────
         spec = json.loads((CONFIG_DIR / 'jobs/psql_job_spec.json').read_text())

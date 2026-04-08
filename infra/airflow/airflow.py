@@ -46,18 +46,9 @@ import pulumi
 from pulumi import Input, Output
 from pulumi_kubernetes.helm.v3 import Chart, ChartOpts, FetchOpts
 
+from config.utils.utils import _deep_merge
+
 CONFIG_DIR = Path(__file__).parent.parent / 'config'
-
-
-def _deep_merge(base: dict, override: dict) -> dict:
-    '''Recursively merge override into base, with override taking precedence.'''
-    result = base.copy()
-    for key, value in override.items():
-        if key in result and isinstance(result[key], dict) and isinstance(value, dict):
-            result[key] = _deep_merge(result[key], value)
-        else:
-            result[key] = value
-    return result
 
 
 @dataclass
@@ -98,7 +89,6 @@ class AirflowArgs:
     - "LocalExecutor"      — tasks run as subprocesses in the scheduler pod, no scaling
     '''
 
-    # ── DB connection (full SQLAlchemy URI in a K8s secret) ───────────────────
     db_metadata_secret: str = 'airflow-metadata'
     '''
     K8s secret with a single "connection" key containing the full SQLAlchemy URI:
@@ -106,7 +96,6 @@ class AirflowArgs:
     Create in __main__.py via LakehouseSecrets before deploying Airflow.
     '''
 
-    # ── Encryption keys (required for stable multi-pod operation) ─────────────
     fernet_key_secret: str = 'airflow-fernet'
     '''K8s secret holding the Fernet key for encrypting stored connections/variables.'''
 
@@ -119,7 +108,6 @@ class AirflowArgs:
     webserver_secret_key_secret_key: str = 'webserver-secret-key'
     '''Key inside webserver_secret_key_secret.'''
 
-    # ── Admin user ────────────────────────────────────────────────────────────
     admin_username: str = 'admin'
     '''Airflow admin username.'''
 
@@ -135,11 +123,9 @@ class AirflowArgs:
     admin_lastname: str = 'User'
     '''Admin user last name.'''
 
-    # ── Webserver ─────────────────────────────────────────────────────────────
     webserver_replicas: int = 1
     '''Number of webserver (api-server in Airflow 3.x) replicas.'''
 
-    # ── Git-sync for DAGs ─────────────────────────────────────────────────────
     git_repo: str = ''
     '''Git repository URL containing DAG files. Leave empty to skip git-sync.'''
 
@@ -160,21 +146,18 @@ class AirflowArgs:
     Leave empty for public repos.
     '''
 
-    # ── Plain environment variables ───────────────────────────────────────────
     env: dict = field(default_factory=dict)
     '''
     Plain key/value env vars injected into scheduler, webserver, and worker pods.
     Values may be Pulumi Outputs (e.g. kafka.bootstrap_servers, minio.endpoint).
     '''
 
-    # ── K8s secrets mounted as env vars ──────────────────────────────────────
     env_secrets: list = field(default_factory=list)
     '''
     List of K8s secret names whose keys are injected as env vars via envFrom.secretRef.
     Use for credentials that should not appear in Helm values (e.g. S3 access keys).
     '''
 
-    # ── Airflow connections auto-registered via env vars ──────────────────────
     connections: list = field(default_factory=list)
     '''
     List of AirflowConnectionArgs. Each becomes AIRFLOW_CONN_<ID_UPPER>=<uri>,
@@ -182,7 +165,6 @@ class AirflowArgs:
     Supports Output[str] URIs (e.g. spark.connect_server_url).
     '''
 
-    # ── Ingress ───────────────────────────────────────────────────────────────
     ingress_enabled: bool = False
     '''Create an Ingress for the Airflow UI (api-server in Airflow 3.x).'''
 
@@ -236,9 +218,11 @@ class Airflow(pulumi.ComponentResource):
 
         args = args or AirflowArgs()
         self._namespace = Output.from_input(args.namespace)
-        release = args.release_name or name
+        admin_password  = Output.from_input(args.admin_password)
+        env_values      = {k: Output.from_input(v) for k, v in args.env.items()}
+        conn_uris       = {c.conn_id: Output.from_input(c.uri) for c in args.connections}
+        release         = args.release_name or name
 
-        # Build the static portion of the Helm values synchronously.
         v = json.loads((CONFIG_DIR / 'helm/helm_values_airflow.json').read_text())
         v['executor']   = args.executor
         v['postgresql'] = {'enabled': False}
@@ -247,6 +231,14 @@ class Airflow(pulumi.ComponentResource):
         v['fernetKeySecretKey']           = args.fernet_key_secret_key
         v['webserverSecretKeySecretName'] = args.webserver_secret_key_secret
         v['webserverSecretKeySecretKey']  = args.webserver_secret_key_secret_key
+        v['airflowUser'] = {
+            'username':  args.admin_username,
+            'password':  admin_password,
+            'email':     args.admin_email,
+            'firstname': args.admin_firstname,
+            'lastname':  args.admin_lastname,
+            'role':      'Admin',
+        }
         v.setdefault('webserver', {})['replicas'] = args.webserver_replicas
 
         if args.git_repo:
@@ -261,6 +253,12 @@ class Airflow(pulumi.ComponentResource):
                 git_sync['credentialsSecret'] = args.git_credentials_secret
             v['dags'] = {'gitSync': git_sync}
 
+        env_list = [{'name': k, 'value': val} for k, val in env_values.items()]
+        for conn_id, uri in conn_uris.items():
+            env_list.append({'name': f'AIRFLOW_CONN_{conn_id.upper()}', 'value': uri})
+        if env_list:
+            v['env'] = env_list
+
         if args.env_secrets:
             v['extraEnvFrom'] = [{'secretRef': {'name': s}} for s in args.env_secrets]
 
@@ -271,34 +269,6 @@ class Airflow(pulumi.ComponentResource):
                 'hosts':            [{'name': f'airflow.{args.ingress_domain}'}],
             }}
 
-        v = _deep_merge(v, args.extra_values)
-
-        # Resolve Output values: connection URIs, admin password, plain env var values.
-        conn_ids  = [c.conn_id for c in args.connections]
-        conn_uris = [Output.from_input(c.uri) for c in args.connections]
-        env_keys  = list(args.env.keys())
-        env_vals  = [Output.from_input(val) for val in args.env.values()]
-        n_conns   = len(conn_uris)
-
-        # Merge resolved Outputs into the values dict via a single-expression lambda.
-        values_output = Output.all(*conn_uris, Output.from_input(args.admin_password), *env_vals).apply(
-            lambda resolved: {
-                **v,
-                'airflowUser': {
-                    'username':  args.admin_username,
-                    'password':  resolved[n_conns],
-                    'email':     args.admin_email,
-                    'firstname': args.admin_firstname,
-                    'lastname':  args.admin_lastname,
-                    'role':      'Admin',
-                },
-                **({'env': [
-                    *[{'name': k, 'value': val} for k, val in zip(env_keys, resolved[n_conns + 1:])],
-                    *[{'name': f'AIRFLOW_CONN_{cid.upper()}', 'value': uri} for cid, uri in zip(conn_ids, resolved[:n_conns])],
-                ]} if env_keys or conn_ids else {}),
-            }
-        )
-
         self.chart = Chart(
             f'{name}-chart',
             ChartOpts(
@@ -306,7 +276,7 @@ class Airflow(pulumi.ComponentResource):
                 version=args.chart_version,
                 namespace=self._namespace,
                 fetch_opts=FetchOpts(repo='https://airflow.apache.org'),
-                values=values_output,
+                values=_deep_merge(v, args.extra_values),
             ),
             opts=pulumi.ResourceOptions(parent=self),
         )
@@ -314,7 +284,6 @@ class Airflow(pulumi.ComponentResource):
         if args.ingress_enabled and args.ingress_domain:
             self.ui_url = Output.from_input(f'http://airflow.{args.ingress_domain}')
         else:
-            # Airflow 3.x renames webserver → api-server
             self.ui_url = Output.concat(
                 'http://', release, '-api-server.', self._namespace,
                 '.svc.cluster.local:8080',

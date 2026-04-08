@@ -30,18 +30,9 @@ from pulumi import Input, Output
 from pulumi_kubernetes.apiextensions import CustomResource
 from pulumi_kubernetes.helm.v3 import Chart, ChartOpts, FetchOpts
 
+from config.utils.utils import _deep_merge
+
 CONFIG_DIR = Path(__file__).parent.parent / 'config'
-
-
-def _deep_merge(base: dict, override: dict) -> dict:
-    '''Recursively merge override into base, with override taking precedence.'''
-    result = base.copy()
-    for key, value in override.items():
-        if key in result and isinstance(result[key], dict) and isinstance(value, dict):
-            result[key] = _deep_merge(result[key], value)
-        else:
-            result[key] = value
-    return result
 
 
 @dataclass
@@ -292,16 +283,16 @@ class Keda(pulumi.ComponentResource):
                 )],
             ))
         '''
-        # Flatten all trigger metadata Input[str] values into a single keyed dict
-        # so they can all be resolved in one Output.all() call.
-        all_inputs = {
-            f't{i}_{key}': val
-            for i, trigger in enumerate(args.triggers)
-            for key, val in trigger.metadata.items()
-        }
+        resource_opts = pulumi.ResourceOptions(parent=self, depends_on=[self.chart])
+        if opts:
+            resource_opts = pulumi.ResourceOptions.merge(resource_opts, opts)
 
-        def build_spec(resolved: dict) -> dict:
-            return {
+        return CustomResource(
+            f'{name}-scaledobject',
+            api_version='keda.sh/v1alpha1',
+            kind='ScaledObject',
+            metadata={'name': args.name, 'namespace': self._namespace},
+            spec={
                 'scaleTargetRef': {
                     'apiVersion': args.target_api_version,
                     'kind':       args.target_kind,
@@ -313,25 +304,11 @@ class Keda(pulumi.ComponentResource):
                 'cooldownPeriod':  args.cooldown_period,
                 'triggers': [
                     {
-                        'type': trigger.type,
-                        'metadata': {
-                            key: resolved[f't{i}_{key}']
-                            for key in trigger.metadata
-                        },
+                        'type':     trigger.type,
+                        'metadata': {k: Output.from_input(v) for k, v in trigger.metadata.items()},
                     }
-                    for i, trigger in enumerate(args.triggers)
+                    for trigger in args.triggers
                 ],
-            }
-
-        resource_opts = pulumi.ResourceOptions(parent=self, depends_on=[self.chart])
-        if opts:
-            resource_opts = pulumi.ResourceOptions.merge(resource_opts, opts)
-
-        return CustomResource(
-            f'{name}-scaledobject',
-            api_version='keda.sh/v1alpha1',
-            kind='ScaledObject',
-            metadata={'name': args.name, 'namespace': self._namespace},
-            spec=pulumi.Output.all(**all_inputs).apply(build_spec),
+            },
             opts=resource_opts,
         )

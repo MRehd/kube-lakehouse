@@ -146,50 +146,43 @@ class Spark(pulumi.ComponentResource):
         super().__init__('k8lh:spark:Spark', name, {}, opts)
 
         args = args or SparkArgs()
-        self._namespace = Output.from_input(args.namespace)
-        release = args.release_name or name
-        image = f'{args.image}:{args.image_tag}'
+        self._namespace      = Output.from_input(args.namespace)
+        s3_endpoint          = Output.from_input(args.s3_endpoint)
+        s3_access_key        = Output.from_input(args.s3_access_key)
+        s3_secret_key        = Output.from_input(args.s3_secret_key)
+        service_account_name = Output.from_input(args.service_account_name)
+        release              = args.release_name or name
+        image                = f'{args.image}:{args.image_tag}'
 
         # ── Spark Connect Server ───────────────────────────────────────────────
         cs_name      = f'{release}-connect'
         cs_app_label = {'app': cs_name}
 
-        # Resolve all Input[str] values together before building the args list.
-        # service_account_name is included because it may be a Pulumi Output
-        # (e.g. sa.metadata.name) and cannot be str()-coerced inside the lambda.
-        connect_args = Output.all(
-            ep=args.s3_endpoint,
-            key=args.s3_access_key,
-            sec=args.s3_secret_key,
-            ns=self._namespace,
-            sa=args.service_account_name,
-        ).apply(lambda v: [
+        connect_args = [
             '--class', 'org.apache.spark.sql.connect.service.SparkConnectServer',
             '--master', args.connect_master,
             '--conf', 'spark.eventLog.enabled=true',
             '--conf', f'spark.eventLog.dir=s3a://{args.event_log_bucket}/',
-            '--conf', f'spark.hadoop.fs.s3a.endpoint={v["ep"]}',
-            '--conf', f'spark.hadoop.fs.s3a.access.key={v["key"]}',
-            '--conf', f'spark.hadoop.fs.s3a.secret.key={v["sec"]}',
+            '--conf', Output.concat('spark.hadoop.fs.s3a.endpoint=', s3_endpoint),
+            '--conf', Output.concat('spark.hadoop.fs.s3a.access.key=', s3_access_key),
+            '--conf', Output.concat('spark.hadoop.fs.s3a.secret.key=', s3_secret_key),
             '--conf', 'spark.hadoop.fs.s3a.path.style.access=true',
             '--conf', 'spark.hadoop.fs.s3a.impl=org.apache.hadoop.fs.s3a.S3AFileSystem',
             '--conf', f'spark.connect.grpc.binding.port={CONNECT_SERVER_PORT}',
-            # K8s executor scheduling
-            '--conf', f'spark.kubernetes.namespace={v["ns"]}',
-            '--conf', f'spark.kubernetes.authenticate.driver.serviceAccountName={v["sa"]}',
+            '--conf', Output.concat('spark.kubernetes.namespace=', self._namespace),
+            '--conf', Output.concat('spark.kubernetes.authenticate.driver.serviceAccountName=', service_account_name),
             '--conf', f'spark.kubernetes.container.image={image}',
-            # Dynamic allocation: executors created on demand, released after 60 s idle
             '--conf', 'spark.dynamicAllocation.enabled=true',
             '--conf', 'spark.dynamicAllocation.shuffleTracking.enabled=true',
             '--conf', 'spark.dynamicAllocation.minExecutors=0',
             '--conf', f'spark.dynamicAllocation.maxExecutors={args.executor_instances}',
             '--conf', 'spark.dynamicAllocation.executorIdleTimeout=60s',
-        ])
+        ]
 
         cs_spec = json.loads((CONFIG_DIR / 'resources/spark_connect_spec.json').read_text())
-        cs_spec['selector']['matchLabels']                    = cs_app_label
-        cs_spec['template']['metadata']['labels']             = cs_app_label
-        cs_spec['template']['spec']['serviceAccountName']     = args.service_account_name
+        cs_spec['selector']['matchLabels']                        = cs_app_label
+        cs_spec['template']['metadata']['labels']                 = cs_app_label
+        cs_spec['template']['spec']['serviceAccountName']         = service_account_name
         cs_spec['template']['spec']['initContainers'][0]['image'] = image
         cs_spec['template']['spec']['containers'][0]['image']     = image
         cs_spec['template']['spec']['containers'][0]['args']      = connect_args
@@ -223,23 +216,18 @@ class Spark(pulumi.ComponentResource):
         hs_name      = f'{release}-history-server'
         hs_app_label = {'app': hs_name}
 
-        # SPARK_HISTORY_OPTS env var — built from S3 credentials
-        spark_history_opts = Output.all(
-            ep=args.s3_endpoint,
-            key=args.s3_access_key,
-            sec=args.s3_secret_key,
-        ).apply(lambda v: (
-            f'-Dspark.history.fs.logDirectory=s3a://{args.event_log_bucket}/ '
-            f'-Dspark.hadoop.fs.s3a.endpoint={v["ep"]} '
-            f'-Dspark.hadoop.fs.s3a.access.key={v["key"]} '
-            f'-Dspark.hadoop.fs.s3a.secret.key={v["sec"]} '
-            f'-Dspark.hadoop.fs.s3a.path.style.access=true '
-            f'-Dspark.hadoop.fs.s3a.impl=org.apache.hadoop.fs.s3a.S3AFileSystem'
-        ))
+        spark_history_opts = Output.concat(
+            '-Dspark.history.fs.logDirectory=s3a://', args.event_log_bucket, '/ ',
+            '-Dspark.hadoop.fs.s3a.endpoint=', s3_endpoint, ' ',
+            '-Dspark.hadoop.fs.s3a.access.key=', s3_access_key, ' ',
+            '-Dspark.hadoop.fs.s3a.secret.key=', s3_secret_key, ' ',
+            '-Dspark.hadoop.fs.s3a.path.style.access=true ',
+            '-Dspark.hadoop.fs.s3a.impl=org.apache.hadoop.fs.s3a.S3AFileSystem',
+        )
 
         hs_spec = json.loads((CONFIG_DIR / 'resources/history_server_spec.json').read_text())
-        hs_spec['selector']['matchLabels']                    = hs_app_label
-        hs_spec['template']['metadata']['labels']             = hs_app_label
+        hs_spec['selector']['matchLabels']                        = hs_app_label
+        hs_spec['template']['metadata']['labels']                 = hs_app_label
         hs_spec['template']['spec']['initContainers'][0]['image'] = image
         hs_spec['template']['spec']['containers'][0]['image']     = image
         hs_spec['template']['spec']['containers'][0]['env'][0]['value'] = spark_history_opts
@@ -266,10 +254,10 @@ class Spark(pulumi.ComponentResource):
             host = f'spark.{args.ingress_domain}'
 
             ingress_spec = json.loads((CONFIG_DIR / 'resources/ingress_spec.json').read_text())
-            ingress_spec['ingressClassName']                                                       = args.ingress_class_name
-            ingress_spec['rules'][0]['host']                                                       = host
-            ingress_spec['rules'][0]['http']['paths'][0]['backend']['service']['name']             = hs_name
-            ingress_spec['rules'][0]['http']['paths'][0]['backend']['service']['port']['number']   = HISTORY_SERVER_PORT
+            ingress_spec['ingressClassName']                                                     = args.ingress_class_name
+            ingress_spec['rules'][0]['host']                                                     = host
+            ingress_spec['rules'][0]['http']['paths'][0]['backend']['service']['name']           = hs_name
+            ingress_spec['rules'][0]['http']['paths'][0]['backend']['service']['port']['number'] = HISTORY_SERVER_PORT
 
             Ingress(
                 f'{name}-history-server-ingress',
