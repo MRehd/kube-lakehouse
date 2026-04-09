@@ -85,10 +85,10 @@ class MinioArgs:
     persistence_enabled: bool = True
     '''Mount a PersistentVolumeClaim for durable data storage.'''
 
-    persistence_size: str = '10Gi'
+    persistence_size: Input[str] = '10Gi'
     '''PVC size, e.g. "10Gi" or "100Gi".'''
 
-    storage_class: Optional[str] = None
+    storage_class: Optional[Input[str]] = None
     '''StorageClass for the PVC. None uses the cluster default.'''
 
     service_type: str = 'ClusterIP'
@@ -103,7 +103,7 @@ class MinioArgs:
     console_port: int = 9001
     '''MinIO Console (web UI) port.'''
 
-    cluster_domain: str = 'cluster.local'
+    cluster_domain: Input[str] = 'cluster.local'
     '''Kubernetes cluster domain suffix, usually "cluster.local".'''
 
     resources: dict = field(default_factory=lambda: {
@@ -115,14 +115,14 @@ class MinioArgs:
     ingress_enabled: bool = False
     '''Create an Ingress for external access to both the API and Console.'''
 
-    ingress_domain: Optional[str] = None
+    ingress_domain: Optional[Input[str]] = None
     '''
     Base domain for Ingress hosts. Creates:
       - minio.<domain>         → MinIO S3 API
       - minio-console.<domain> → MinIO Console UI
     '''
 
-    ingress_class_name: str = 'nginx'
+    ingress_class_name: Input[str] = 'nginx'
     '''Ingress class name (e.g. "nginx", "traefik").'''
 
     ingress_annotations: Optional[dict] = None
@@ -223,8 +223,8 @@ class Minio(pulumi.ComponentResource):
 
         # ── Ingress ───────────────────────────────────────────────────────────
         if args.ingress_enabled and args.ingress_domain:
-            api_host     = f'minio.{args.ingress_domain}'
-            console_host = f'minio-console.{args.ingress_domain}'
+            api_host     = Output.concat('minio.', Output.from_input(args.ingress_domain))
+            console_host = Output.concat('minio-console.', Output.from_input(args.ingress_domain))
 
             annotations = {
                 'nginx.ingress.kubernetes.io/proxy-body-size':    '0',
@@ -234,31 +234,31 @@ class Minio(pulumi.ComponentResource):
             if args.ingress_annotations:
                 annotations.update(args.ingress_annotations)
 
-            spec = json.loads((CONFIG_DIR / 'resources/ingress_spec.json').read_text())
-            spec['ingressClassName'] = args.ingress_class_name
-
-            # API rule (first rule slot in template)
-            api_rule = spec['rules'][0]
+            spec_api = json.loads((CONFIG_DIR / 'resources/ingress_spec.json').read_text())
+            spec_api['ingressClassName'] = args.ingress_class_name
+            api_rule = spec_api['rules'][0]
             api_rule['host'] = api_host
             api_rule['http']['paths'][0]['backend']['service']['name']           = self._release_name
             api_rule['http']['paths'][0]['backend']['service']['port']['number'] = args.api_port
 
-            # Console rule — deep-copy the API rule, then override host/backend
-            console_rule = json.loads(json.dumps(api_rule))
+            spec_console = json.loads((CONFIG_DIR / 'resources/ingress_spec.json').read_text())
+            spec_console['ingressClassName'] = args.ingress_class_name
+            console_rule = spec_console['rules'][0]
             console_rule['host'] = console_host
             console_rule['http']['paths'][0]['backend']['service']['name']           = f'{self._release_name}-console'
             console_rule['http']['paths'][0]['backend']['service']['port']['number'] = args.console_port
-            spec['rules'].append(console_rule)
+            
+            spec_api['rules'] = [api_rule, console_rule]
 
             Ingress(
                 f'{self._release_name}-ingress',
                 metadata={'namespace': self._namespace, 'annotations': annotations},
-                spec=spec,
+                spec=spec_api,
                 opts=pulumi.ResourceOptions(parent=self, depends_on=[self.chart]),
             )
 
-            self.api_url     = Output.from_input(f'http://{api_host}')
-            self.console_url = Output.from_input(f'http://{console_host}')
+            self.api_url     = Output.concat('http://', api_host)
+            self.console_url = Output.concat('http://', console_host)
         else:
             self.api_url     = self.endpoint
             self.console_url = self.console_endpoint

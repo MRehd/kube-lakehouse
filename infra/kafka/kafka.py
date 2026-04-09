@@ -49,7 +49,7 @@ class TopicArgs:
     retention_bytes: Optional[int] = None
     '''Max topic size in bytes before oldest messages are deleted. None = unlimited.'''
 
-    cleanup_policy: str = 'delete'
+    cleanup_policy: Input[str] = 'delete'
     '''Cleanup policy: "delete", "compact", or "compact,delete".'''
 
     min_insync_replicas: int = 1
@@ -98,10 +98,10 @@ class KafkaArgs:
     persistence_enabled: bool = True
     '''Mount a PersistentVolumeClaim per broker for durable log storage.'''
 
-    persistence_size: str = '10Gi'
+    persistence_size: Input[str] = '10Gi'
     '''PVC size per broker.'''
 
-    storage_class: Optional[str] = None
+    storage_class: Optional[Input[str]] = None
     '''StorageClass for broker PVCs. None uses the cluster default.'''
 
     resources: dict = field(default_factory=lambda: {
@@ -110,7 +110,7 @@ class KafkaArgs:
     })
     '''CPU and memory requests/limits for broker pods.'''
 
-    heap_opts: str = '-Xms512m -Xmx1g'
+    heap_opts: Input[str] = '-Xms512m -Xmx1g'
     '''JVM heap options for broker pods.'''
 
     log_retention_hours: int = 168
@@ -128,7 +128,7 @@ class KafkaArgs:
     auto_create_topics: bool = True
     '''Allow Kafka to create topics automatically on first use.'''
 
-    cluster_domain: str = 'cluster.local'
+    cluster_domain: Input[str] = 'cluster.local'
     '''Kubernetes cluster domain suffix.'''
 
     autoscaling: AutoscalingArgs = field(default_factory=AutoscalingArgs)
@@ -137,7 +137,7 @@ class KafkaArgs:
     topics: List[TopicArgs] = field(default_factory=list)
     '''Topics to create at deploy time via Helm provisioning.'''
 
-    extra_config: str = ''
+    extra_config: Input[str] = ''
     '''Additional broker configuration lines (appended to server.properties).'''
 
 

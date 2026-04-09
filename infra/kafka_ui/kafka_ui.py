@@ -47,7 +47,7 @@ class KafkaUiArgs:
     Accepts a plain string or a Pulumi Output (e.g. kafka.bootstrap_servers).
     '''
 
-    cluster_name: str = 'local'
+    cluster_name: Input[str] = 'local'
     '''Display name for the Kafka cluster shown in the UI.'''
 
     replica_count: int = 1
@@ -65,10 +65,10 @@ class KafkaUiArgs:
     ingress_enabled: bool = True
     '''Create an Ingress for external access.'''
 
-    ingress_domain: Optional[str] = None
+    ingress_domain: Optional[Input[str]] = None
     '''Base domain. Creates kafka-ui.<domain>.'''
 
-    ingress_class_name: str = 'nginx'
+    ingress_class_name: Input[str] = 'nginx'
     '''Ingress class name.'''
 
     ingress_annotations: Optional[dict] = None
@@ -127,7 +127,7 @@ class KafkaUi(pulumi.ComponentResource):
             values['ingress'] = {
                 'enabled':          True,
                 'ingressClassName': args.ingress_class_name,
-                'host':             f'kafka-ui.{args.ingress_domain}',
+                'host':             Output.concat('kafka-ui.', Output.from_input(args.ingress_domain)),
                 'path':             '/',
                 'pathType':         'Prefix',
                 'annotations':      args.ingress_annotations or {},
@@ -152,7 +152,7 @@ class KafkaUi(pulumi.ComponentResource):
             '.svc.cluster.local:', str(args.service_port),
         )
         self.ui_url = (
-            Output.from_input(f'http://kafka-ui.{args.ingress_domain}')
+            Output.concat('http://kafka-ui.', Output.from_input(args.ingress_domain))
             if args.ingress_enabled and args.ingress_domain
             else self.endpoint
         )

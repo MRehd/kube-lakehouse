@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Dict, List
 
 import pulumi
-from pulumi import Input
+from pulumi import Input, Output
 from pulumi_kubernetes.core.v1 import Secret
 from pulumi_kubernetes.meta.v1 import ObjectMetaArgs
 
@@ -53,7 +53,7 @@ class LakehouseSecrets(pulumi.ComponentResource):
     def __init__(
         self,
         name: str,
-        namespace: str,
+        namespace: Input[str],
         secrets: List[SecretArgs],
         opts: pulumi.ResourceOptions = None,
     ):
@@ -68,7 +68,8 @@ class LakehouseSecrets(pulumi.ComponentResource):
         '''
         super().__init__('lakehouse:secrets:LakehouseSecrets', name, None, opts)
 
-        child_opts = pulumi.ResourceOptions(parent=self)
+        _namespace  = Output.from_input(namespace)
+        child_opts  = pulumi.ResourceOptions(parent=self)
 
         self.secrets = {}
         for secret_args in secrets:
@@ -76,7 +77,7 @@ class LakehouseSecrets(pulumi.ComponentResource):
                 f'{name}-{secret_args.name}',
                 metadata=ObjectMetaArgs(
                     name=secret_args.name,
-                    namespace=namespace,
+                    namespace=_namespace,
                 ),
                 string_data=secret_args.data,
                 opts=child_opts,

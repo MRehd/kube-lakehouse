@@ -57,7 +57,7 @@ class FlinkIcebergCatalogArgs:
     polaris_endpoint: Input[str]
     '''Base URL of the Polaris service. Accepts a Pulumi Output.'''
 
-    warehouse: str
+    warehouse: Input[str]
     '''Catalog name in Polaris used as the Iceberg warehouse.'''
 
     s3_endpoint: Input[str]
@@ -69,7 +69,7 @@ class FlinkIcebergCatalogArgs:
     s3_secret_key: Input[str]
     '''S3 secret key. Accepts a Pulumi secret Output.'''
 
-    credentials_secret: str = 'polaris-flink-credentials'
+    credentials_secret: Input[str] = 'polaris-flink-credentials'
     '''
     K8s Secret name containing CLIENT_ID and CLIENT_SECRET for this catalog's
     Polaris principal. Mounted as env vars with a per-catalog prefix.
@@ -79,7 +79,7 @@ class FlinkIcebergCatalogArgs:
     s3_path_style_access: bool = True
     '''Use path-style S3 access (required for MinIO).'''
 
-    s3_region: str = 'us-east-1'
+    s3_region: Input[str] = 'us-east-1'
     '''S3 region (any value works for MinIO).'''
 
 
@@ -90,16 +90,16 @@ class FlinkJobArgs:
     image: Input[str]
     '''Docker image containing the PyFlink job script and its dependencies. Accepts a Pulumi Output (e.g. docker.Image.image_name).'''
 
-    python_script: str
+    python_script: Input[str]
     '''Path to the Python entry-point inside the container (e.g. "/opt/flink/jobs/ingest.py").'''
 
     job_name: str = 'flink-job'
     '''Human-readable job name shown in the Flink UI. Also used as the K8s resource name.'''
 
-    image_tag: str = 'latest'
+    image_tag: Input[str] = 'latest'
     '''Image tag.'''
 
-    flink_version: str = 'v2_0'
+    flink_version: Input[str] = 'v2_0'
     '''Flink version string for the FlinkDeployment spec (e.g. "v2_0", "v1_19").'''
 
     parallelism: int = 1
@@ -108,13 +108,13 @@ class FlinkJobArgs:
     jobmanager_cpu: float = 0.5
     '''CPU cores for the JobManager pod.'''
 
-    jobmanager_memory: str = '1024m'
+    jobmanager_memory: Input[str] = '1024m'
     '''Memory for the JobManager pod.'''
 
     taskmanager_cpu: float = 1.0
     '''CPU cores per TaskManager pod.'''
 
-    taskmanager_memory: str = '2048m'
+    taskmanager_memory: Input[str] = '2048m'
     '''Memory per TaskManager pod.'''
 
     taskmanager_replicas: int = 1
@@ -123,7 +123,7 @@ class FlinkJobArgs:
     env: Dict[str, Input[str]] = field(default_factory=dict)
     '''Env vars to inject into job pods. Values may be Pulumi Outputs (e.g. kafka.bootstrap_servers).'''
 
-    credentials_secret: Optional[str] = None
+    credentials_secret: Optional[Input[str]] = None
     '''
     A top-level K8s Secret (CLIENT_ID / CLIENT_SECRET) to mount as env vars.
     Required when any iceberg_catalog entry needs Polaris auth without a per-catalog secret.
@@ -141,22 +141,22 @@ class FlinkJobArgs:
     autoscaling_target_utilization: float = 0.75
     '''Target task slot utilization (0.0–1.0) before the autoscaler scales up.'''
 
-    autoscaling_metrics_window: str = '5m'
+    autoscaling_metrics_window: Input[str] = '5m'
     '''Time window for metric aggregation.'''
 
-    autoscaling_stabilization_interval: str = '1m'
+    autoscaling_stabilization_interval: Input[str] = '1m'
     '''Minimum time between consecutive scaling decisions.'''
 
-    extra_flink_config: Dict[str, str] = field(default_factory=dict)
+    extra_flink_config: Dict[str, Input[str]] = field(default_factory=dict)
     '''Additional key-value entries merged into the FlinkDeployment flinkConfiguration.'''
 
     ingress_enabled: bool = False
     '''Expose the JobManager web UI via an Ingress.'''
 
-    ingress_domain: Optional[str] = None
+    ingress_domain: Optional[Input[str]] = None
     '''Base domain. Creates <job_name>.<domain> → JobManager UI (port 8081).'''
 
-    ingress_class_name: str = 'nginx'
+    ingress_class_name: Input[str] = 'nginx'
     '''Ingress class name.'''
 
 
@@ -381,7 +381,7 @@ class Flink(pulumi.ComponentResource):
         if args.ingress_enabled and args.ingress_domain:
             ingress_spec = json.loads((CONFIG_DIR / 'resources/ingress_spec.json').read_text())
             ingress_spec['ingressClassName']                                                     = args.ingress_class_name
-            ingress_spec['rules'][0]['host']                                                     = f'{args.job_name}.{args.ingress_domain}'
+            ingress_spec['rules'][0]['host']                                                     = Output.concat(args.job_name, '.', Output.from_input(args.ingress_domain))
             ingress_spec['rules'][0]['http']['paths'][0]['backend']['service']['name']           = f'{args.job_name}-rest'
             ingress_spec['rules'][0]['http']['paths'][0]['backend']['service']['port']['number'] = 8081
 

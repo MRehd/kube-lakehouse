@@ -132,19 +132,19 @@ class PsqlArgs:
     architecture: str = 'standalone'
     '''Deployment architecture: "standalone" or "replication".'''
 
-    existing_secret: str = None
+    existing_secret: Optional[Input[str]] = None
     '''Name of an existing K8s Secret containing a "postgres-password" key.'''
 
-    database: str = 'postgres'
+    database: Input[str] = 'postgres'
     '''Default database created at startup.'''
 
     persistence_enabled: bool = True
     '''Mount a PersistentVolumeClaim for durable storage.'''
 
-    persistence_size: str = '10Gi'
+    persistence_size: Input[str] = '10Gi'
     '''PVC size, e.g. "10Gi".'''
 
-    storage_class: str = 'hostpath'
+    storage_class: Input[str] = 'hostpath'
     '''StorageClass for the PVC (default "hostpath" works on Docker Desktop / Rancher Desktop).'''
 
     service_type: str = 'ClusterIP'
@@ -156,10 +156,10 @@ class PsqlArgs:
     max_connections: int = 100
     '''Maximum concurrent connections.'''
 
-    shared_buffers: str = '128MB'
+    shared_buffers: Input[str] = '128MB'
     '''Shared-buffer memory allocation.'''
 
-    cluster_domain: str = 'cluster.local'
+    cluster_domain: Input[str] = 'cluster.local'
     '''Kubernetes cluster domain suffix, usually "cluster.local".'''
 
     resources: dict = field(default_factory=lambda: {

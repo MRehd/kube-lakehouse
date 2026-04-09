@@ -83,63 +83,63 @@ class AirflowArgs:
     chart_version: str = '1.20.0'
     '''Version of the official Apache Airflow Helm chart.'''
 
-    executor: str = 'KubernetesExecutor'
+    executor: Input[str] = 'KubernetesExecutor'
     '''
     Task executor backend.
     - "KubernetesExecutor" — each task gets its own K8s pod, zero idle cost (default)
     - "LocalExecutor"      — tasks run as subprocesses in the scheduler pod, no scaling
     '''
 
-    db_metadata_secret: str = 'airflow-metadata'
+    db_metadata_secret: Input[str] = 'airflow-metadata'
     '''
     K8s secret with a single "connection" key containing the full SQLAlchemy URI:
     postgresql+psycopg2://user:password@host:5432/airflow
     Create in __main__.py via LakehouseSecrets before deploying Airflow.
     '''
 
-    fernet_key_secret: str = 'airflow-fernet'
+    fernet_key_secret: Input[str] = 'airflow-fernet'
     '''K8s secret holding the Fernet key for encrypting stored connections/variables.'''
 
-    fernet_key_secret_key: str = 'fernet-key'
+    fernet_key_secret_key: Input[str] = 'fernet-key'
     '''Key inside fernet_key_secret.'''
 
-    webserver_secret_key_secret: str = 'airflow-webserver'
+    webserver_secret_key_secret: Input[str] = 'airflow-webserver'
     '''K8s secret holding the Flask session signing key.'''
 
-    webserver_secret_key_secret_key: str = 'webserver-secret-key'
+    webserver_secret_key_secret_key: Input[str] = 'webserver-secret-key'
     '''Key inside webserver_secret_key_secret.'''
 
-    admin_username: str = 'admin'
+    admin_username: Input[str] = 'admin'
     '''Airflow admin username.'''
 
     admin_password: Input[str] = 'admin'
     '''Airflow admin password. Accepts a Pulumi secret Output.'''
 
-    admin_email: str = 'admin@example.com'
+    admin_email: Input[str] = 'admin@example.com'
     '''Admin user email.'''
 
-    admin_firstname: str = 'Admin'
+    admin_firstname: Input[str] = 'Admin'
     '''Admin user first name.'''
 
-    admin_lastname: str = 'User'
+    admin_lastname: Input[str] = 'User'
     '''Admin user last name.'''
 
     webserver_replicas: int = 1
     '''Number of webserver (api-server in Airflow 3.x) replicas.'''
 
-    git_repo: str = ''
+    git_repo: Input[str] = ''
     '''Git repository URL containing DAG files. Leave empty to skip git-sync.'''
 
-    git_branch: str = 'main'
+    git_branch: Input[str] = 'main'
     '''Git branch to sync from.'''
 
-    git_subpath: str = 'dags'
+    git_subpath: Input[str] = 'dags'
     '''Subdirectory within the repo containing DAG files.'''
 
     git_sync_interval: int = 60
     '''Seconds between git-sync polling intervals.'''
 
-    git_credentials_secret: str = ''
+    git_credentials_secret: Input[str] = ''
     '''
     Name of a K8s secret with "GIT_SYNC_USERNAME" / "GIT_SYNC_PASSWORD" keys
     (and their GITSYNC_* equivalents for git-sync v4 compatibility).
@@ -169,10 +169,10 @@ class AirflowArgs:
     ingress_enabled: bool = False
     '''Create an Ingress for the Airflow UI (api-server in Airflow 3.x).'''
 
-    ingress_domain: str = ''
+    ingress_domain: Input[str] = ''
     '''Base domain. Creates airflow.<domain>.'''
 
-    ingress_class_name: str = 'nginx'
+    ingress_class_name: Input[str] = 'nginx'
     '''Ingress class name.'''
 
     extra_values: dict = field(default_factory=dict)
@@ -267,7 +267,7 @@ class Airflow(pulumi.ComponentResource):
             v['ingress'] = {'apiServer': {
                 'enabled':          True,
                 'ingressClassName': args.ingress_class_name,
-                'hosts':            [{'name': f'airflow.{args.ingress_domain}'}],
+                'hosts':            [{'name': Output.concat('airflow.', Output.from_input(args.ingress_domain))}],
             }}
 
         # Airflow chart auto-generates secrets (jwt-secret, redis-password, etc.)
@@ -294,7 +294,7 @@ class Airflow(pulumi.ComponentResource):
         )
 
         if args.ingress_enabled and args.ingress_domain:
-            self.ui_url = Output.from_input(f'http://airflow.{args.ingress_domain}')
+            self.ui_url = Output.concat('http://airflow.', Output.from_input(args.ingress_domain))
         else:
             self.ui_url = Output.concat(
                 'http://', release, '-api-server.', self._namespace,

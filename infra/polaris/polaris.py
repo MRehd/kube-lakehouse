@@ -67,7 +67,7 @@ class CatalogArgs:
     s3_endpoint: Input[str]
     '''S3/MinIO endpoint URL. Accepts a Pulumi Output (e.g. minio.endpoint).'''
 
-    s3_bucket: str
+    s3_bucket: Input[str]
     '''S3/MinIO bucket backing this catalog's warehouse.'''
 
     s3_access_key: Input[str]
@@ -79,7 +79,7 @@ class CatalogArgs:
     s3_path_style_access: bool = True
     '''Use path-style S3 access (required for MinIO).'''
 
-    s3_region: str = 'us-east-1'
+    s3_region: Input[str] = 'us-east-1'
     '''S3 region (any value works for MinIO).'''
 
     realm: str = 'POLARIS'
@@ -88,7 +88,7 @@ class CatalogArgs:
     catalog_type: str = 'INTERNAL'
     '''Catalog type: INTERNAL or EXTERNAL.'''
 
-    default_base_location: Optional[str] = None
+    default_base_location: Optional[Input[str]] = None
     '''Default warehouse base location. Defaults to s3://<bucket>/.'''
 
 
@@ -149,13 +149,13 @@ class PolarisArgs:
     chart_repo: str = 'https://downloads.apache.org/polaris/helm-chart/'
     '''Helm chart repository URL.'''
 
-    image_repository: str = 'apache/polaris'
+    image_repository: Input[str] = 'apache/polaris'
     '''Docker image repository.'''
 
-    image_tag: str = 'latest'
+    image_tag: Input[str] = 'latest'
     '''Docker image tag.'''
 
-    image_pull_policy: str = 'IfNotPresent'
+    image_pull_policy: Input[str] = 'IfNotPresent'
     '''Image pull policy: Always, IfNotPresent, or Never.'''
 
     replica_count: int = 1
@@ -176,16 +176,16 @@ class PolarisArgs:
     persistence_type: str = 'relational-jdbc'
     '''Persistence backend: "in-memory" or "relational-jdbc".'''
 
-    persistence_secret_name: Optional[str] = None
+    persistence_secret_name: Optional[Input[str]] = None
     '''K8s Secret containing database credentials (jdbcUrl, username, password keys).'''
 
-    persistence_secret_username_key: str = 'username'
+    persistence_secret_username_key: Input[str] = 'username'
     '''Key in the secret for the database username.'''
 
-    persistence_secret_password_key: str = 'password'
+    persistence_secret_password_key: Input[str] = 'password'
     '''Key in the secret for the database password.'''
 
-    persistence_secret_jdbc_url_key: str = 'jdbcUrl'
+    persistence_secret_jdbc_url_key: Input[str] = 'jdbcUrl'
     '''Key in the secret for the JDBC connection URL.'''
 
     resources: dict = field(default_factory=lambda: {
@@ -197,7 +197,7 @@ class PolarisArgs:
     metrics_enabled: bool = True
     '''Enable Prometheus metrics collection.'''
 
-    logging_level: str = 'INFO'
+    logging_level: Input[str] = 'INFO'
     '''Root logging level.'''
 
     logging_console_json: bool = False
@@ -212,16 +212,16 @@ class PolarisArgs:
     autoscaling_max_replicas: int = 2
     '''Maximum HPA replicas.'''
 
-    cluster_domain: str = 'cluster.local'
+    cluster_domain: Input[str] = 'cluster.local'
     '''Kubernetes cluster domain suffix.'''
 
     ingress_enabled: bool = True
     '''Create an Ingress for external access.'''
 
-    ingress_domain: Optional[str] = None
+    ingress_domain: Optional[Input[str]] = None
     '''Base domain. Creates polaris.<domain>.'''
 
-    ingress_class_name: str = 'nginx'
+    ingress_class_name: Input[str] = 'nginx'
     '''Ingress class name.'''
 
     ingress_annotations: Optional[dict] = None
@@ -354,7 +354,7 @@ class Polaris(pulumi.ComponentResource):
 
         # ── Ingress ───────────────────────────────────────────────────────────
         if args.ingress_enabled and args.ingress_domain:
-            api_host = f'polaris.{args.ingress_domain}'
+            api_host = Output.concat('polaris.', Output.from_input(args.ingress_domain))
 
             annotations = {
                 'nginx.ingress.kubernetes.io/proxy-body-size':    '0',
@@ -376,7 +376,7 @@ class Polaris(pulumi.ComponentResource):
                 spec=spec,
                 opts=pulumi.ResourceOptions(parent=self, depends_on=[self.chart]),
             )
-            self.api_url = Output.from_input(f'http://{api_host}')
+            self.api_url = Output.concat('http://', api_host)
         else:
             self.api_url = self.endpoint
 

@@ -44,7 +44,7 @@ class ProducerArgs:
     namespace: Input[str]
     '''Kubernetes namespace to deploy into (must already exist).'''
 
-    image_name: str
+    image_name: Input[str]
     '''Full image name without tag, e.g. "docker.io/myuser/producer".'''
 
     registry_username: Input[str]
@@ -53,10 +53,10 @@ class ProducerArgs:
     registry_password: Input[str]
     '''Docker registry password or access token. Accepts a Pulumi secret Output.'''
 
-    registry_server: str = 'https://index.docker.io/v1/'
+    registry_server: Input[str] = 'https://index.docker.io/v1/'
     '''Docker registry server URL.'''
 
-    image_tag: str = 'latest'
+    image_tag: Input[str] = 'latest'
     '''Image tag to build and push.'''
 
     port: int = 8000
@@ -65,16 +65,16 @@ class ProducerArgs:
     replicas: int = 1
     '''Number of pod replicas.'''
 
-    cpu_request: str = '100m'
+    cpu_request: Input[str] = '100m'
     '''CPU request for the pod (e.g. "100m").'''
 
-    cpu_limit: str = '500m'
+    cpu_limit: Input[str] = '500m'
     '''CPU limit for the pod.'''
 
-    memory_request: str = '128Mi'
+    memory_request: Input[str] = '128Mi'
     '''Memory request for the pod.'''
 
-    memory_limit: str = '256Mi'
+    memory_limit: Input[str] = '256Mi'
     '''Memory limit for the pod.'''
 
     env: Dict[str, Input[str]] = field(default_factory=dict)
@@ -83,10 +83,10 @@ class ProducerArgs:
     ingress_enabled: bool = False
     '''Create an Ingress for external access.'''
 
-    ingress_domain: str = ''
+    ingress_domain: Input[str] = ''
     '''Base domain. Creates producer.<domain>.'''
 
-    ingress_class_name: str = 'nginx'
+    ingress_class_name: Input[str] = 'nginx'
     '''Ingress class name.'''
 
 
@@ -110,8 +110,11 @@ class Producer(pulumi.ComponentResource):
         self._namespace      = Output.from_input(args.namespace)
         registry_username    = Output.from_input(args.registry_username)
         registry_password    = Output.from_input(args.registry_password)
+        image_name           = Output.from_input(args.image_name)
+        image_tag            = Output.from_input(args.image_tag)
+        ingress_domain       = Output.from_input(args.ingress_domain)
         env_values           = {k: Output.from_input(v) for k, v in args.env.items()}
-        full_image           = f'{args.image_name}:{args.image_tag}'
+        full_image           = Output.concat(image_name, ':', image_tag)
 
         image = docker.Image(
             f'{name}-image',
@@ -121,7 +124,7 @@ class Producer(pulumi.ComponentResource):
                 dockerfile=f'{BUILD_CONTEXT}/dockerfile',
             ),
             registry=docker.RegistryArgs(
-                server=args.registry_server,
+                server=Output.from_input(args.registry_server),
                 username=registry_username,
                 password=registry_password,
             ),
@@ -168,7 +171,7 @@ class Producer(pulumi.ComponentResource):
         self.endpoint = Output.concat('http://', name, ':', str(args.port))
 
         if args.ingress_enabled and args.ingress_domain:
-            host = f'producer.{args.ingress_domain}'
+            host = Output.concat('producer.', ingress_domain)
 
             ingress_spec = json.loads((CONFIG_DIR / 'resources/ingress_spec.json').read_text())
             ingress_spec['ingressClassName'] = args.ingress_class_name
@@ -186,7 +189,7 @@ class Producer(pulumi.ComponentResource):
                 spec=ingress_spec,
                 opts=pulumi.ResourceOptions(parent=self),
             )
-            self.url = Output.from_input(f'http://{host}')
+            self.url = Output.concat('http://', host)
         else:
             self.url = self.endpoint
 

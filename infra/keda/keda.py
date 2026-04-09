@@ -48,10 +48,10 @@ class TriggerArgs:
 
 def KafkaTrigger(
     bootstrap_servers: Input[str],
-    consumer_group: str,
-    topic: str,
+    consumer_group: Input[str],
+    topic: Input[str],
     lag_threshold: int = 10,
-    offset_reset_policy: str = 'latest',
+    offset_reset_policy: Input[str] = 'latest',
     partition_limitation: Optional[int] = None,
 ) -> TriggerArgs:
     '''
@@ -98,7 +98,7 @@ class ScaledObjectArgs:
     name: str
     '''Name for the ScaledObject K8s resource.'''
 
-    target_name: str
+    target_name: Input[str]
     '''Name of the Deployment or StatefulSet to scale.'''
 
     triggers: List[TriggerArgs]
@@ -142,7 +142,7 @@ class KedaArgs:
     metrics_server_replicas: int = 1
     '''Number of KEDA metrics server replicas.'''
 
-    watch_namespace: str = ''
+    watch_namespace: Input[str] = ''
     '''Namespace KEDA watches. Empty string = cluster-wide.'''
 
     resources: dict = field(default_factory=lambda: {

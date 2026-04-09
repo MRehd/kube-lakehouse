@@ -63,10 +63,10 @@ class SparkArgs:
     release_name: Optional[str] = None
     '''Resource name prefix for K8s resources. Defaults to the Pulumi resource name.'''
 
-    image: str = 'apache/spark'
+    image: Input[str] = 'apache/spark'
     '''Docker image for both the Connect server and History Server.'''
 
-    image_tag: str = '4.0.0'
+    image_tag: Input[str] = '4.0.0'
     '''Image tag.'''
 
     service_account_name: Input[str] = 'spark'
@@ -77,7 +77,7 @@ class SparkArgs:
     and pass the output here.
     '''
 
-    connect_master: str = 'k8s://https://kubernetes.default.svc:443'
+    connect_master: Input[str] = 'k8s://https://kubernetes.default.svc:443'
     '''
     Spark master URL for the Connect server.
     - "k8s://https://kubernetes.default.svc:443" — spawn executor pods via K8s (default)
@@ -89,7 +89,7 @@ class SparkArgs:
     executor_instances: int = 4
     '''Maximum executor pods for dynamic allocation (maxExecutors). minExecutors is always 0.'''
 
-    event_log_bucket: str = 'spark-logs'
+    event_log_bucket: Input[str] = 'spark-logs'
     '''MinIO bucket where the Connect server writes Spark event logs.'''
 
     s3_endpoint: Input[str] = ''
@@ -104,10 +104,10 @@ class SparkArgs:
     ingress_enabled: bool = False
     '''Create an Ingress for the History Server UI.'''
 
-    ingress_domain: str = ''
+    ingress_domain: Input[str] = ''
     '''Base domain. Creates spark.<domain> → History Server.'''
 
-    ingress_class_name: str = 'nginx'
+    ingress_class_name: Input[str] = 'nginx'
     '''Ingress class name.'''
 
 
@@ -151,8 +151,11 @@ class Spark(pulumi.ComponentResource):
         s3_access_key        = Output.from_input(args.s3_access_key)
         s3_secret_key        = Output.from_input(args.s3_secret_key)
         service_account_name = Output.from_input(args.service_account_name)
+        connect_master       = Output.from_input(args.connect_master)
+        event_log_bucket     = Output.from_input(args.event_log_bucket)
+        ingress_domain       = Output.from_input(args.ingress_domain)
         release              = args.release_name or name
-        image                = f'{args.image}:{args.image_tag}'
+        image                = Output.concat(Output.from_input(args.image), ':', Output.from_input(args.image_tag))
 
         # ── Spark Connect Server ───────────────────────────────────────────────
         cs_name      = f'{release}-connect'
@@ -160,9 +163,9 @@ class Spark(pulumi.ComponentResource):
 
         connect_args = [
             '--class', 'org.apache.spark.sql.connect.service.SparkConnectServer',
-            '--master', args.connect_master,
+            '--master', connect_master,
             '--conf', 'spark.eventLog.enabled=true',
-            '--conf', f'spark.eventLog.dir=s3a://{args.event_log_bucket}/',
+            '--conf', Output.concat('spark.eventLog.dir=s3a://', event_log_bucket, '/'),
             '--conf', Output.concat('spark.hadoop.fs.s3a.endpoint=', s3_endpoint),
             '--conf', Output.concat('spark.hadoop.fs.s3a.access.key=', s3_access_key),
             '--conf', Output.concat('spark.hadoop.fs.s3a.secret.key=', s3_secret_key),
@@ -171,7 +174,7 @@ class Spark(pulumi.ComponentResource):
             '--conf', f'spark.connect.grpc.binding.port={CONNECT_SERVER_PORT}',
             '--conf', Output.concat('spark.kubernetes.namespace=', self._namespace),
             '--conf', Output.concat('spark.kubernetes.authenticate.driver.serviceAccountName=', service_account_name),
-            '--conf', f'spark.kubernetes.container.image={image}',
+            '--conf', Output.concat('spark.kubernetes.container.image=', image),
             '--conf', 'spark.dynamicAllocation.enabled=true',
             '--conf', 'spark.dynamicAllocation.shuffleTracking.enabled=true',
             '--conf', 'spark.dynamicAllocation.minExecutors=0',
@@ -217,7 +220,7 @@ class Spark(pulumi.ComponentResource):
         hs_app_label = {'app': hs_name}
 
         spark_history_opts = Output.concat(
-            '-Dspark.history.fs.logDirectory=s3a://', args.event_log_bucket, '/ ',
+            '-Dspark.history.fs.logDirectory=s3a://', event_log_bucket, '/ ',
             '-Dspark.hadoop.fs.s3a.endpoint=', s3_endpoint, ' ',
             '-Dspark.hadoop.fs.s3a.access.key=', s3_access_key, ' ',
             '-Dspark.hadoop.fs.s3a.secret.key=', s3_secret_key, ' ',
@@ -251,7 +254,7 @@ class Spark(pulumi.ComponentResource):
 
         # ── History Server Ingress (optional) ─────────────────────────────────
         if args.ingress_enabled and args.ingress_domain:
-            host = f'spark.{args.ingress_domain}'
+            host = Output.concat('spark.', ingress_domain)
 
             ingress_spec = json.loads((CONFIG_DIR / 'resources/ingress_spec.json').read_text())
             ingress_spec['ingressClassName']                                                     = args.ingress_class_name
@@ -269,7 +272,7 @@ class Spark(pulumi.ComponentResource):
                 spec=ingress_spec,
                 opts=pulumi.ResourceOptions(parent=self),
             )
-            self.history_server_url = Output.from_input(f'http://{host}')
+            self.history_server_url = Output.concat('http://', host)
         else:
             self.history_server_url = Output.concat(
                 'http://', hs_name, '.', self._namespace,

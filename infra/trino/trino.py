@@ -49,7 +49,7 @@ class TrinoIcebergCatalogArgs:
     polaris_endpoint: Input[str]
     '''Base URL of the Polaris service (e.g. http://polaris:8181). Accepts a Pulumi Output.'''
 
-    warehouse: str
+    warehouse: Input[str]
     '''Catalog name in Polaris used as the Iceberg warehouse.'''
 
     s3_endpoint: Input[str] = ''
@@ -64,7 +64,7 @@ class TrinoIcebergCatalogArgs:
     s3_path_style_access: bool = True
     '''Use path-style S3 access (required for MinIO).'''
 
-    s3_region: str = 'us-east-1'
+    s3_region: Input[str] = 'us-east-1'
     '''S3 region (any value works for MinIO).'''
 
     client_id: Input[str] = 'root'
@@ -79,7 +79,7 @@ class TrinoIcebergCatalogArgs:
     Ignored when credentials_secret is set.
     '''
 
-    credentials_secret: Optional[str] = None
+    credentials_secret: Optional[Input[str]] = None
     '''
     Name of a K8s Secret containing CLIENT_ID and CLIENT_SECRET keys.
     When set, credentials are read from env vars at pod startup via Trino's
@@ -124,10 +124,10 @@ class TrinoArgs:
     workers: int = 2
     '''Number of Trino worker replicas.'''
 
-    coordinator_heap: str = '1G'
+    coordinator_heap: Input[str] = '1G'
     '''JVM max heap size for the coordinator (e.g. "2G").'''
 
-    worker_heap: str = '1G'
+    worker_heap: Input[str] = '1G'
     '''JVM max heap size for each worker.'''
 
     coordinator_resources: dict = field(default_factory=lambda: {
@@ -145,10 +145,10 @@ class TrinoArgs:
     ingress_enabled: bool = False
     '''Create an Ingress for external access to the Trino UI and JDBC endpoint.'''
 
-    ingress_domain: Optional[str] = None
+    ingress_domain: Optional[Input[str]] = None
     '''Base domain. Creates trino.<domain>.'''
 
-    ingress_class_name: str = 'nginx'
+    ingress_class_name: Input[str] = 'nginx'
     '''Ingress class name.'''
 
     ingress_annotations: Optional[dict] = None
@@ -238,7 +238,7 @@ class Trino(pulumi.ComponentResource):
                 'enabled':     True,
                 'className':   args.ingress_class_name,
                 'annotations': args.ingress_annotations or {},
-                'hosts': [{'host': f'trino.{args.ingress_domain}', 'paths': [{'path': '/', 'pathType': 'ImplementationSpecific'}]}],
+                'hosts': [{'host': Output.concat('trino.', Output.from_input(args.ingress_domain)), 'paths': [{'path': '/', 'pathType': 'ImplementationSpecific'}]}],
                 'tls': [],
             }
 
@@ -305,7 +305,7 @@ class Trino(pulumi.ComponentResource):
             '.svc.cluster.local:8080',
         )
         self.ui_url = (
-            Output.from_input(f'http://trino.{args.ingress_domain}')
+            Output.concat('http://trino.', Output.from_input(args.ingress_domain))
             if args.ingress_enabled and args.ingress_domain
             else self.endpoint
         )
