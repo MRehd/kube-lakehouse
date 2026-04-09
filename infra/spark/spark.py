@@ -101,6 +101,9 @@ class SparkArgs:
     s3_secret_key: Input[str] = ''
     '''S3 secret key. Accepts a Pulumi secret Output.'''
 
+    s3_region: Input[str] = 'us-east-1'
+    '''S3/MinIO region.'''
+
     ingress_enabled: bool = False
     '''Create an Ingress for the History Server UI.'''
 
@@ -150,6 +153,7 @@ class Spark(pulumi.ComponentResource):
         s3_endpoint          = Output.from_input(args.s3_endpoint)
         s3_access_key        = Output.from_input(args.s3_access_key)
         s3_secret_key        = Output.from_input(args.s3_secret_key)
+        s3_region            = Output.from_input(args.s3_region)
         service_account_name = Output.from_input(args.service_account_name)
         connect_master       = Output.from_input(args.connect_master)
         event_log_bucket     = Output.from_input(args.event_log_bucket)
@@ -170,6 +174,7 @@ class Spark(pulumi.ComponentResource):
             '--conf', Output.concat('spark.hadoop.fs.s3a.access.key=', s3_access_key),
             '--conf', Output.concat('spark.hadoop.fs.s3a.secret.key=', s3_secret_key),
             '--conf', 'spark.hadoop.fs.s3a.path.style.access=true',
+            '--conf', Output.concat('spark.hadoop.fs.s3a.endpoint.region=', s3_region),
             '--conf', 'spark.hadoop.fs.s3a.impl=org.apache.hadoop.fs.s3a.S3AFileSystem',
             '--conf', f'spark.connect.grpc.binding.port={CONNECT_SERVER_PORT}',
             '--conf', Output.concat('spark.kubernetes.namespace=', self._namespace),
@@ -225,6 +230,7 @@ class Spark(pulumi.ComponentResource):
             '-Dspark.hadoop.fs.s3a.access.key=', s3_access_key, ' ',
             '-Dspark.hadoop.fs.s3a.secret.key=', s3_secret_key, ' ',
             '-Dspark.hadoop.fs.s3a.path.style.access=true ',
+            '-Dspark.hadoop.fs.s3a.endpoint.region=', s3_region, ' ',
             '-Dspark.hadoop.fs.s3a.impl=org.apache.hadoop.fs.s3a.S3AFileSystem',
         )
 

@@ -25,10 +25,12 @@ class FlinkCryptoLoader:
                 'uri'                 = '{os.getenv("POLARIS_ENDPOINT")}/api/catalog',
                 'warehouse'           = '{self.catalog}',
                 'credential'          = '{client_id}:{client_secret}',
+                'scope'               = 'PRINCIPAL_ROLE:ALL',
                 's3.endpoint'         = '{os.getenv("S3_ENDPOINT")}',
                 's3.access-key'       = '{os.getenv("S3_ACCESS_KEY")}',
                 's3.secret-key'       = '{os.getenv("S3_SECRET_KEY")}',
-                's3.path-style-access'= 'true'
+                's3.path-style-access'= 'true',
+                's3.region'           = '{os.getenv("S3_REGION")}'
             )
         """)
         self.t_env.execute_sql(f'USE CATALOG {self.catalog}')

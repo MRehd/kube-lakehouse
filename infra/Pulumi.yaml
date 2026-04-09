@@ -65,3 +65,6 @@ config:
   k8lh:docker_flink_jobs_image_name:
     description: Full image name without tag, e.g. localhost:5000/flink-jobs or docker.io/myuser/flink-jobs
     value: "localhost:5000/flink-jobs"
+  k8lh:s3_region:
+    description: S3/MinIO region (used for Iceberg catalog and Flink S3 config)
+    value: "us-east-1"

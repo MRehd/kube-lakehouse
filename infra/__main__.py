@@ -52,8 +52,9 @@ project_name = pulumi.get_project()
 env = pulumi.get_stack()
 
 # Load stack configuration values
-config = pulumi.Config()
-domain = config.require('domain')
+config    = pulumi.Config()
+domain    = config.require('domain')
+s3_region = config.require('s3_region')
 
 # Service credentials loaded from Pulumi config (secrets are encrypted)
 # These are used to create Kubernetes secrets for each service
@@ -342,6 +343,7 @@ polaris.create_catalogs(
             s3_bucket='bronze',
             s3_access_key=credentials['minio']['user'],
             s3_secret_key=credentials['minio']['password'],
+            s3_region=s3_region,
         ),
         CatalogArgs(
             name='silver',
@@ -349,6 +351,7 @@ polaris.create_catalogs(
             s3_bucket='silver',
             s3_access_key=credentials['minio']['user'],
             s3_secret_key=credentials['minio']['password'],
+            s3_region=s3_region,
         ),
         CatalogArgs(
             name='gold',
@@ -356,6 +359,7 @@ polaris.create_catalogs(
             s3_bucket='gold',
             s3_access_key=credentials['minio']['user'],
             s3_secret_key=credentials['minio']['password'],
+            s3_region=s3_region,
         ),
     ],
     opts=pulumi.ResourceOptions(depends_on=[polaris_bootstrap]),
@@ -560,6 +564,7 @@ trino = Trino(
                 s3_endpoint=minio.endpoint,
                 s3_access_key=credentials['minio']['user'],
                 s3_secret_key=credentials['minio']['password'],
+                s3_region=s3_region,
             ),
             TrinoIcebergCatalogArgs(
                 name='silver',
@@ -569,6 +574,7 @@ trino = Trino(
                 s3_endpoint=minio.endpoint,
                 s3_access_key=credentials['minio']['user'],
                 s3_secret_key=credentials['minio']['password'],
+                s3_region=s3_region,
             ),
             TrinoIcebergCatalogArgs(
                 name='gold',
@@ -578,6 +584,7 @@ trino = Trino(
                 s3_endpoint=minio.endpoint,
                 s3_access_key=credentials['minio']['user'],
                 s3_secret_key=credentials['minio']['password'],
+                s3_region=s3_region,
             ),
         ],
     ),
@@ -619,6 +626,7 @@ spark = Spark(
         s3_endpoint=minio.endpoint,
         s3_access_key=credentials['minio']['user'],
         s3_secret_key=credentials['minio']['password'],
+        s3_region=s3_region,
         ingress_enabled=True,
         ingress_domain=domain,
         ingress_class_name='nginx',
@@ -746,6 +754,7 @@ flink_extra_config = {
     's3.access-key':        credentials['minio']['user'],
     's3.secret-key':        credentials['minio']['password'],
     's3.path-style-access': 'true',
+    's3.region':            s3_region,
 }
 
 flink_bronze_catalog = FlinkIcebergCatalogArgs(
@@ -756,6 +765,7 @@ flink_bronze_catalog = FlinkIcebergCatalogArgs(
     s3_endpoint=minio.endpoint,
     s3_access_key=credentials['minio']['user'],
     s3_secret_key=credentials['minio']['password'],
+    s3_region=s3_region,
 )
 
 for job_name, script in [
@@ -776,6 +786,7 @@ for job_name, script in [
                 'S3_ENDPOINT':             minio.endpoint,
                 'S3_ACCESS_KEY':           credentials['minio']['user'],
                 'S3_SECRET_KEY':           credentials['minio']['password'],
+                'S3_REGION':               s3_region,
             },
             credentials_secret=flink_credentials_secret,
             iceberg_catalogs=[flink_bronze_catalog],
