@@ -2,7 +2,7 @@
   "flinkVersion": "v2_0",
   "flinkConfiguration": {},
   "image": "",
-  "imagePullPolicy": "IfNotPresent",
+  "imagePullPolicy": "Always",
   "serviceAccount": "flink",
   "jobManager": {
     "resource": {

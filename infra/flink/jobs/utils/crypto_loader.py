@@ -5,20 +5,9 @@ from pyflink.datastream import StreamExecutionEnvironment
 
 class FlinkCryptoLoader:
 
-    jars = [
-        'file:///opt/flink/lib/flink-connector-kafka-3.4.0-1.20.jar',
-        'file:///opt/flink/lib/flink-sql-connector-kafka-3.4.0-1.20.jar',
-        'file:///opt/flink/lib/flink-shaded-hadoop-2-uber-2.8.3-10.0.jar',
-        'file:///opt/flink/lib/iceberg-flink-runtime-1.20-1.8.1.jar',
-    ]
-
     env = StreamExecutionEnvironment.get_execution_environment()
     env.enable_checkpointing(10000)
     t_env = StreamTableEnvironment.create(env)
-    t_env.get_config().set('pipeline.jars', ';'.join(jars))
-    t_env.get_config().set('pipeline.classpaths', ';'.join(jars))
-    t_env.get_config().set('classloader.resolve-order', 'parent-first')
-    t_env.get_config().set('classloader.parent-first-patterns.additional', 'com.codahale.metrics')
 
     def __init__(self, catalog, schema, table, topic):
         self.catalog = catalog
@@ -27,7 +16,22 @@ class FlinkCryptoLoader:
         self.topic = topic
 
     def init_entity(self):
-        # Catalog is pre-registered by the Flink operator via flinkConfiguration
+        client_id     = os.getenv(f'POLARIS_{self.catalog.upper()}_CLIENT_ID', '')
+        client_secret = os.getenv(f'POLARIS_{self.catalog.upper()}_CLIENT_SECRET', '')
+
+        self.t_env.execute_sql(f"""
+            CREATE CATALOG IF NOT EXISTS {self.catalog} WITH (
+                'type'                = 'iceberg',
+                'catalog-type'        = 'rest',
+                'uri'                 = '{os.getenv("POLARIS_ENDPOINT")}/api/catalog',
+                'warehouse'           = '{self.catalog}',
+                'credential'          = '{client_id}:{client_secret}',
+                's3.endpoint'         = '{os.getenv("S3_ENDPOINT")}',
+                's3.access-key'       = '{os.getenv("S3_ACCESS_KEY")}',
+                's3.secret-key'       = '{os.getenv("S3_SECRET_KEY")}',
+                's3.path-style-access'= 'true'
+            )
+        """)
         self.t_env.execute_sql(f'USE CATALOG {self.catalog}')
         self.t_env.execute_sql(f'CREATE DATABASE IF NOT EXISTS {self.schema}')
 
