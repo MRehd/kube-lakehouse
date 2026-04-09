@@ -62,3 +62,6 @@ config:
   k8lh:docker_producer_image_name:
     description: Full image name without tag, e.g. localhost:5000/producer or docker.io/myuser/producer
     value: "localhost:5000/producer"
+  k8lh:docker_flink_jobs_image_name:
+    description: Full image name without tag, e.g. localhost:5000/flink-jobs or docker.io/myuser/flink-jobs
+    value: "localhost:5000/flink-jobs"

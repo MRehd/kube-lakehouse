@@ -40,6 +40,7 @@ import pulumi
 from pulumi import Input, Output
 from pulumi_kubernetes.apiextensions import CustomResource
 from pulumi_kubernetes.helm.v3 import Chart, ChartOpts, FetchOpts
+from pulumi_kubernetes.networking.v1 import Ingress
 
 from config.utils.utils import _deep_merge
 
@@ -86,8 +87,8 @@ class FlinkIcebergCatalogArgs:
 class FlinkJobArgs:
     '''Configuration for a PyFlink Application Mode job.'''
 
-    image: str
-    '''Docker image containing the PyFlink job script and its dependencies.'''
+    image: Input[str]
+    '''Docker image containing the PyFlink job script and its dependencies. Accepts a Pulumi Output (e.g. docker.Image.image_name).'''
 
     python_script: str
     '''Path to the Python entry-point inside the container (e.g. "/opt/flink/jobs/ingest.py").'''
@@ -119,8 +120,8 @@ class FlinkJobArgs:
     taskmanager_replicas: int = 1
     '''Number of TaskManager replicas.'''
 
-    env: Dict[str, str] = field(default_factory=dict)
-    '''Static env vars to inject into job pods (key=value).'''
+    env: Dict[str, Input[str]] = field(default_factory=dict)
+    '''Env vars to inject into job pods. Values may be Pulumi Outputs (e.g. kafka.bootstrap_servers).'''
 
     credentials_secret: Optional[str] = None
     '''
@@ -148,6 +149,15 @@ class FlinkJobArgs:
 
     extra_flink_config: Dict[str, str] = field(default_factory=dict)
     '''Additional key-value entries merged into the FlinkDeployment flinkConfiguration.'''
+
+    ingress_enabled: bool = False
+    '''Expose the JobManager web UI via an Ingress.'''
+
+    ingress_domain: Optional[str] = None
+    '''Base domain. Creates <job_name>.<domain> → JobManager UI (port 8081).'''
+
+    ingress_class_name: str = 'nginx'
+    '''Ingress class name.'''
 
 
 @dataclass
@@ -291,6 +301,7 @@ class Flink(pulumi.ComponentResource):
                 ],
             ))
         '''
+        image         = Output.from_input(args.image)
         cat_endpoints = [Output.from_input(c.polaris_endpoint) for c in args.iceberg_catalogs]
         cat_s3eps     = [Output.from_input(c.s3_endpoint)      for c in args.iceberg_catalogs]
         cat_s3keys    = [Output.from_input(c.s3_access_key)    for c in args.iceberg_catalogs]
@@ -299,7 +310,7 @@ class Flink(pulumi.ComponentResource):
         spec = json.loads((CONFIG_DIR / 'resources/flink_deployment_spec.json').read_text())
 
         spec['flinkVersion']                        = args.flink_version
-        spec['image']                               = f'{args.image}:{args.image_tag}'
+        spec['image']                               = Output.concat(image, ':', args.image_tag)
         spec['jobManager']['resource']['cpu']       = args.jobmanager_cpu
         spec['jobManager']['resource']['memory']    = args.jobmanager_memory
         spec['taskManager']['replicas']             = args.taskmanager_replicas
@@ -358,7 +369,7 @@ class Flink(pulumi.ComponentResource):
         if opts:
             resource_opts = pulumi.ResourceOptions.merge(resource_opts, opts)
 
-        return CustomResource(
+        cr = CustomResource(
             f'{name}-flinkdeployment',
             api_version='flink.apache.org/v1beta1',
             kind='FlinkDeployment',
@@ -366,3 +377,19 @@ class Flink(pulumi.ComponentResource):
             spec=spec,
             opts=resource_opts,
         )
+
+        if args.ingress_enabled and args.ingress_domain:
+            ingress_spec = json.loads((CONFIG_DIR / 'resources/ingress_spec.json').read_text())
+            ingress_spec['ingressClassName']                                                     = args.ingress_class_name
+            ingress_spec['rules'][0]['host']                                                     = f'{args.job_name}.{args.ingress_domain}'
+            ingress_spec['rules'][0]['http']['paths'][0]['backend']['service']['name']           = args.job_name
+            ingress_spec['rules'][0]['http']['paths'][0]['backend']['service']['port']['number'] = 8081
+
+            Ingress(
+                f'{name}-ingress',
+                metadata={'name': f'{args.job_name}-ingress', 'namespace': self._namespace},
+                spec=ingress_spec,
+                opts=pulumi.ResourceOptions(parent=self, depends_on=[cr]),
+            )
+
+        return cr

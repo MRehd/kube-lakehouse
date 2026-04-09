@@ -270,6 +270,17 @@ class Airflow(pulumi.ComponentResource):
                 'hosts':            [{'name': f'airflow.{args.ingress_domain}'}],
             }}
 
+        # Airflow chart auto-generates secrets (jwt-secret, redis-password, etc.)
+        # using randAlphaNum. Pulumi re-renders helm template on every run and gets
+        # new random values, causing spurious diffs on both the secrets themselves
+        # and on the checksum/* annotations the chart stamps onto Deployments.
+        def ignore_generated_secret_data(t: pulumi.ResourceTransformArgs) -> pulumi.ResourceTransformResult:
+            if t.type_ == 'kubernetes:core/v1:Secret':
+                t.opts.ignore_changes = ['data']
+            elif t.type_ == 'kubernetes:apps/v1:Deployment':
+                t.opts.ignore_changes = ['spec.template.metadata.annotations']
+            return pulumi.ResourceTransformResult(props=t.props, opts=t.opts)
+
         self.chart = Chart(
             f'{name}-chart',
             ChartOpts(
@@ -279,7 +290,7 @@ class Airflow(pulumi.ComponentResource):
                 fetch_opts=FetchOpts(repo='https://airflow.apache.org'),
                 values=_deep_merge(v, args.extra_values),
             ),
-            opts=pulumi.ResourceOptions(parent=self),
+            opts=pulumi.ResourceOptions(parent=self, transforms=[ignore_generated_secret_data]),
         )
 
         if args.ingress_enabled and args.ingress_domain:

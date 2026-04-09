@@ -24,6 +24,7 @@ Usage:
 # =============================================================================
 
 import pulumi
+import pulumi_docker as docker
 from pulumi_kubernetes.core.v1 import Namespace
 from pulumi_kubernetes.helm.v3 import Chart, ChartOpts, FetchOpts
 
@@ -691,6 +692,13 @@ airflow = Airflow(
                 uri=spark.connect_server_url,
             ),
         ],
+        extra_values={
+            'scheduler': {
+                'startupProbe': {
+                    'failureThreshold': 20,
+                },
+            },
+        },
     ),
     opts=pulumi.ResourceOptions(depends_on=[ns, ingress_nginx, db['airflow']['instance'], airflow_metadata_secret, spark]),
 )
@@ -710,41 +718,70 @@ flink = Flink(
     opts=pulumi.ResourceOptions(depends_on=[ns]),
 )
 
-# Jobs are submitted via flink.submit_job() once job images are built.
-# Example:
-#
-# flink.submit_job(
-#     f'job-{project_name}-{env}-btc-ingest',
-#     FlinkJobArgs(
-#         job_name='btc-kafka-to-iceberg',
-#         image='my-registry/flink-btc-job',
-#         python_script='/opt/flink/jobs/ingest.py',
-#         parallelism=2,
-#         credentials_secret=flink_credentials_secret,
-#         iceberg_catalogs=[
-#             FlinkIcebergCatalogArgs(
-#                 name='bronze',
-#                 polaris_endpoint=polaris.endpoint,
-#                 warehouse='bronze',
-#                 credentials_secret=flink_credentials_secret,
-#                 s3_endpoint=minio.endpoint,
-#                 s3_access_key=credentials['minio']['user'],
-#                 s3_secret_key=credentials['minio']['password'],
-#             ),
-#         ],
-#         autoscaling_enabled=True,
-#         autoscaling_target_utilization=0.75,
-#         autoscaling_metrics_window='5m',
-#         autoscaling_stabilization_interval='1m',
-#         extra_flink_config={
-#             'restart-strategy.type': 'exponential-delay',
-#             'restart-strategy.exponential-delay.initial-backoff': '1 s',
-#             'restart-strategy.exponential-delay.max-backoff': '5 min',
-#             'restart-strategy.exponential-delay.reset-backoff-threshold': '10 min',
-#         },
-#     ),
-#     opts=pulumi.ResourceOptions(depends_on=[polaris_principals]),
-# )
+flink_image = docker.Image(
+    f'flink-jobs-image-{project_name}-{env}',
+    image_name=config.require('docker_flink_jobs_image_name'),
+    build=docker.DockerBuildArgs(
+        context='flink',
+        dockerfile='flink/Dockerfile',
+        platform='linux/amd64',
+    ),
+    registry=docker.RegistryArgs(
+        server='https://index.docker.io/v1/',
+        username=config.require('docker_registry_username'),
+        password=config.require_secret('docker_registry_password'),
+    ),
+)
+
+flink_extra_config = {
+    'state.checkpoints.dir':                                      's3a://spark-logs/flink-checkpoints/',
+    'restart-strategy.type':                                      'exponential-delay',
+    'restart-strategy.exponential-delay.initial-backoff':         '1 s',
+    'restart-strategy.exponential-delay.max-backoff':             '5 min',
+    'restart-strategy.exponential-delay.reset-backoff-threshold': '10 min',
+    # S3A credentials for checkpoint storage (MinIO)
+    's3.endpoint':          minio.endpoint,
+    's3.access-key':        credentials['minio']['user'],
+    's3.secret-key':        credentials['minio']['password'],
+    's3.path-style-access': 'true',
+}
+
+flink_bronze_catalog = FlinkIcebergCatalogArgs(
+    name='bronze',
+    polaris_endpoint=polaris.endpoint,
+    warehouse='bronze',
+    credentials_secret=flink_credentials_secret,
+    s3_endpoint=minio.endpoint,
+    s3_access_key=credentials['minio']['user'],
+    s3_secret_key=credentials['minio']['password'],
+)
+
+for job_name, script in [
+    ('flink-btc',          '/opt/flink/jobs/btc.py'),
+    ('flink-eth',          '/opt/flink/jobs/eth.py'),
+    ('flink-transactions', '/opt/flink/jobs/transactions.py'),
+]:
+    flink.submit_job(
+        f'job-{project_name}-{env}-{job_name}',
+        FlinkJobArgs(
+            job_name=job_name,
+            image=config.require('docker_flink_jobs_image_name'),
+            python_script=script,
+            parallelism=1,
+            env={'KAFKA_BOOTSTRAP_SERVERS': kafka.bootstrap_servers},
+            credentials_secret=flink_credentials_secret,
+            iceberg_catalogs=[flink_bronze_catalog],
+            autoscaling_enabled=True,
+            autoscaling_target_utilization=0.75,
+            autoscaling_metrics_window='5m',
+            autoscaling_stabilization_interval='1m',
+            extra_flink_config=flink_extra_config,
+            ingress_enabled=True,
+            ingress_domain=domain,
+            ingress_class_name='nginx',
+        ),
+        opts=pulumi.ResourceOptions(depends_on=[polaris_principals, flink_image]),
+    )
 
 
 # =============================================================================

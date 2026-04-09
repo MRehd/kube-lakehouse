@@ -77,8 +77,8 @@ class ProducerArgs:
     memory_limit: str = '256Mi'
     '''Memory limit for the pod.'''
 
-    env: Dict[str, str] = field(default_factory=dict)
-    '''Environment variables to inject into the pod (key=value). Values may be Pulumi Outputs.'''
+    env: Dict[str, Input[str]] = field(default_factory=dict)
+    '''Environment variables to inject into the pod. Values may be Pulumi Outputs (e.g. kafka.bootstrap_servers).'''
 
     ingress_enabled: bool = False
     '''Create an Ingress for external access.'''
@@ -107,17 +107,12 @@ class Producer(pulumi.ComponentResource):
     ):
         super().__init__('k8lh:producer:Producer', name, {}, opts)
 
-        self._namespace = Output.from_input(args.namespace)
-        full_image = f'{args.image_name}:{args.image_tag}'
+        self._namespace      = Output.from_input(args.namespace)
+        registry_username    = Output.from_input(args.registry_username)
+        registry_password    = Output.from_input(args.registry_password)
+        env_values           = {k: Output.from_input(v) for k, v in args.env.items()}
+        full_image           = f'{args.image_name}:{args.image_tag}'
 
-        # Build and push image (registry auth skipped if username is empty)
-        registry = Output.all(args.registry_username, args.registry_password).apply(
-            lambda vals: docker.RegistryArgs(
-                server=args.registry_server,
-                username=vals[0],
-                password=vals[1],
-            ) if vals[0] else None
-        )
         image = docker.Image(
             f'{name}-image',
             image_name=full_image,
@@ -125,11 +120,15 @@ class Producer(pulumi.ComponentResource):
                 context=BUILD_CONTEXT,
                 dockerfile=f'{BUILD_CONTEXT}/dockerfile',
             ),
-            registry=registry,
+            registry=docker.RegistryArgs(
+                server=args.registry_server,
+                username=registry_username,
+                password=registry_password,
+            ),
             opts=pulumi.ResourceOptions(parent=self),
         )
 
-        env_vars = [{'name': k, 'value': v} for k, v in args.env.items()]
+        env_vars = [{'name': k, 'value': v} for k, v in env_values.items()]
 
         Deployment(
             f'{name}-deployment',
