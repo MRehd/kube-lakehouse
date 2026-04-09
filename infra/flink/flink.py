@@ -382,7 +382,7 @@ class Flink(pulumi.ComponentResource):
             ingress_spec = json.loads((CONFIG_DIR / 'resources/ingress_spec.json').read_text())
             ingress_spec['ingressClassName']                                                     = args.ingress_class_name
             ingress_spec['rules'][0]['host']                                                     = f'{args.job_name}.{args.ingress_domain}'
-            ingress_spec['rules'][0]['http']['paths'][0]['backend']['service']['name']           = args.job_name
+            ingress_spec['rules'][0]['http']['paths'][0]['backend']['service']['name']           = f'{args.job_name}-rest'
             ingress_spec['rules'][0]['http']['paths'][0]['backend']['service']['port']['number'] = 8081
 
             Ingress(
