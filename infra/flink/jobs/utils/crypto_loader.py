@@ -6,7 +6,6 @@ from pyflink.datastream import StreamExecutionEnvironment
 class FlinkCryptoLoader:
 
     env = StreamExecutionEnvironment.get_execution_environment()
-    env.enable_checkpointing(10000)
     t_env = StreamTableEnvironment.create(env)
 
     def __init__(self, catalog, schema, table, topic):

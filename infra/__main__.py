@@ -734,11 +734,13 @@ flink_image = docker.Image(
 )
 
 flink_extra_config = {
-    'state.checkpoints.dir':                                      's3a://spark-logs/flink-checkpoints/',
-    'restart-strategy.type':                                      'exponential-delay',
-    'restart-strategy.exponential-delay.initial-backoff':         '1 s',
-    'restart-strategy.exponential-delay.max-backoff':             '5 min',
-    'restart-strategy.exponential-delay.reset-backoff-threshold': '10 min',
+    'execution.checkpointing.interval':                            '10s',
+    'execution.checkpointing.externalized-checkpoint-retention':   'RETAIN_ON_CANCELLATION',
+    'state.checkpoints.dir':                                       's3a://spark-logs/flink-checkpoints/',
+    'restart-strategy.type':                                       'exponential-delay',
+    'restart-strategy.exponential-delay.initial-backoff':          '1 s',
+    'restart-strategy.exponential-delay.max-backoff':              '5 min',
+    'restart-strategy.exponential-delay.reset-backoff-threshold':  '10 min',
     # S3A credentials for checkpoint storage (MinIO)
     's3.endpoint':          minio.endpoint,
     's3.access-key':        credentials['minio']['user'],
