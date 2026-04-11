@@ -4,3 +4,4 @@ venv/
 uv.lock
 .claude
 keys.json
+*__pycache__

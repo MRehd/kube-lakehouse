@@ -340,7 +340,7 @@ polaris_bootstrap = polaris.create_bootstrap(
 
 # Create Polaris catalogs for each medallion layer
 # Each catalog is backed by a MinIO bucket for S3 storage
-polaris.create_catalogs(
+polaris_catalogs = polaris.create_catalogs(
     f'catalogs-{project_name}-{env}',
     [
         CatalogArgs(
@@ -379,13 +379,13 @@ polaris_roles = polaris.create_roles(
         RoleArgs(
             name='data_engineer',
             catalog_grants=[
-                CatalogGrantArgs(catalog='bronze', role='catalog_admin'),
+                CatalogGrantArgs(catalog='bronze',  role='catalog_admin'),
                 CatalogGrantArgs(catalog='silver', role='catalog_admin'),
                 CatalogGrantArgs(catalog='gold', role='catalog_admin'),
             ],
         ),
     ],
-    opts=pulumi.ResourceOptions(depends_on=[polaris_bootstrap]),
+    opts=pulumi.ResourceOptions(depends_on=[polaris_bootstrap, polaris_catalogs]),
 )
 
 # Service principals for compute engines

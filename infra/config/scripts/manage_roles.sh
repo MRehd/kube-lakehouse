@@ -27,12 +27,18 @@ create_role() {
   if [ "$exists" = "200" ]; then
     echo "Principal role $name already exists"
   else
-    curl -sf -X POST "$POLARIS_URL/api/management/v1/principal-roles" \
+    http_code=$(curl -s -o /tmp/role_resp.json -w "%{http_code}" -X POST \
+      "$POLARIS_URL/api/management/v1/principal-roles" \
       -H "Authorization: Bearer $TOKEN" \
       -H 'Content-Type: application/json' \
-      -d "{\"principalRole\": {\"name\": \"$name\"}}" \
-      && echo "Created principal role $name" \
-      || echo "Failed to create principal role $name"
+      -d "{\"principalRole\": {\"name\": \"$name\"}}")
+    if [ "$http_code" = "201" ] || [ "$http_code" = "200" ]; then
+      echo "Created principal role $name"
+    else
+      echo "ERROR: Failed to create principal role $name (HTTP $http_code)"
+      cat /tmp/role_resp.json
+      exit 1
+    fi
   fi
 }
 
@@ -51,12 +57,18 @@ grant_catalog_role() {
   if [ "$granted" = "yes" ]; then
     echo "Catalog role $catalog_role already granted to $principal_role on $catalog"
   else
-    curl -sf -X PUT "$POLARIS_URL/api/management/v1/principal-roles/$principal_role/catalog-roles/$catalog" \
+    http_code=$(curl -s -o /tmp/grant_resp.json -w "%{http_code}" -X PUT \
+      "$POLARIS_URL/api/management/v1/principal-roles/$principal_role/catalog-roles/$catalog" \
       -H "Authorization: Bearer $TOKEN" \
       -H 'Content-Type: application/json' \
-      -d "{\"catalogRole\": {\"name\": \"$catalog_role\"}}" \
-      && echo "Granted catalog role $catalog_role to $principal_role on $catalog" \
-      || echo "Failed to grant catalog role $catalog_role to $principal_role on $catalog"
+      -d "{\"catalogRole\": {\"name\": \"$catalog_role\"}}")
+    if [ "$http_code" = "201" ] || [ "$http_code" = "200" ]; then
+      echo "Granted catalog role $catalog_role to $principal_role on $catalog"
+    else
+      echo "ERROR: Failed to grant $catalog_role to $principal_role on $catalog (HTTP $http_code)"
+      cat /tmp/grant_resp.json
+      exit 1
+    fi
   fi
 }
 
