@@ -1,6 +1,5 @@
 ﻿#!/bin/sh
 # Polaris catalog creation script
-# Placeholders: {{POLARIS_URL}}, {{CLIENT_ID}}, {{CLIENT_SECRET}}, {{CATALOG_CALLS}}
 
 POLARIS_URL='{{POLARIS_URL}}'
 
@@ -34,20 +33,28 @@ create_catalog() {
   "storageConfigInfo": {
     "storageType": "S3",
     "allowedLocations": ["s3://$bucket/"],
-    "s3.endpoint": "$endpoint",
-    "s3.access-key-id": "$access_key",
-    "s3.secret-access-key": "$secret_key",
-    "s3.region": "$region",
-    "s3.path-style-access": "$path_style"
+    "endpoint": "$endpoint",
+    "region": "$region",
+    "pathStyleAccess": $path_style
   }
 }
 EOF
 )
 
-  curl -sf -X POST "$POLARIS_URL/api/management/v1/catalogs" \
+  http_code=$(curl -s -o /tmp/catalog_resp.json -w "%{http_code}" -X POST "$POLARIS_URL/api/management/v1/catalogs" \
     -H "Authorization: Bearer $TOKEN" \
     -H 'Content-Type: application/json' \
-    -d "$payload" || echo "Catalog $name may already exist"
+    -d "$payload")
+
+  if [ "$http_code" = "201" ] || [ "$http_code" = "200" ]; then
+    echo "Catalog $name created successfully"
+  elif [ "$http_code" = "409" ]; then
+    echo "Catalog $name already exists, skipping"
+  else
+    echo "ERROR: Failed to create catalog $name (HTTP $http_code)"
+    cat /tmp/catalog_resp.json
+    exit 1
+  fi
 }
 
 {{CATALOG_CALLS}}

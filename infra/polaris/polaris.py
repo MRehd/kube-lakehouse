@@ -227,6 +227,38 @@ class PolarisArgs:
     ingress_annotations: Optional[dict] = None
     '''Extra Ingress annotations.'''
 
+    s3_region: Input[str] = 'us-east-1'
+    '''
+    AWS region (any value works for MinIO). Sets AWS_REGION on the Polaris pod.
+    Required by the AWS SDK even when connecting to MinIO.
+    '''
+
+    storage_secret_name: Optional[str] = None
+    '''
+    Name of a K8s Secret containing S3/MinIO credentials. Sets AWS_ACCESS_KEY_ID and
+    AWS_SECRET_ACCESS_KEY on the Polaris pod so all AWS SDK code paths that use
+    DefaultCredentialsProvider can resolve credentials (required for MinIO).
+    '''
+
+    storage_secret_access_key: str = 'user'
+    '''Key inside storage_secret_name that holds the S3/MinIO access key ID.'''
+
+    storage_secret_secret_key: str = 'password'
+    '''Key inside storage_secret_name that holds the S3/MinIO secret access key.'''
+
+    s3_endpoint: Input[str] = ''
+    '''
+    S3/MinIO endpoint URL. Sets AWS_ENDPOINT_URL_S3 on the Polaris pod so the AWS SDK
+    sends all S3 requests to MinIO instead of real AWS. Accepts a Pulumi Output.
+    '''
+
+    skip_credential_subscoping: bool = False
+    '''
+    When True, adds SKIP_CREDENTIAL_SUBSCOPING_INDIRECTION=true to the polaris.features
+    section. Polaris then returns stored catalog credentials directly instead of calling
+    AWS STS to generate subscoped credentials. Required when using MinIO (no STS endpoint).
+    '''
+
     extra_values: dict = field(default_factory=dict)
     '''Additional Helm values deep-merged over the base config.'''
 
@@ -309,6 +341,15 @@ class Polaris(pulumi.ComponentResource):
         values['autoscaling']['enabled']          = args.autoscaling_enabled
         values['autoscaling']['minReplicas']      = args.autoscaling_min_replicas
         values['autoscaling']['maxReplicas']      = args.autoscaling_max_replicas
+        values['extraEnv'] = [
+            {'name': 'AWS_REGION',            'value': args.s3_region},
+            {'name': 'AWS_ACCESS_KEY_ID',     'valueFrom': {'secretKeyRef': {'name': args.storage_secret_name, 'key': args.storage_secret_access_key}}},
+            {'name': 'AWS_SECRET_ACCESS_KEY', 'valueFrom': {'secretKeyRef': {'name': args.storage_secret_name, 'key': args.storage_secret_secret_key}}},
+            {'name': 'AWS_ENDPOINT_URL_S3', 'value': args.s3_endpoint},
+        ]
+
+        if args.skip_credential_subscoping:
+            values['features'] = {'SKIP_CREDENTIAL_SUBSCOPING_INDIRECTION': True}
 
         if args.persistence_type == 'relational-jdbc':
             values['persistence'] = {

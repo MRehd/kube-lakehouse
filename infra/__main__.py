@@ -320,6 +320,12 @@ polaris = Polaris(
         ingress_enabled=True,
         ingress_domain=domain,
         ingress_class_name='nginx',
+        s3_region=s3_region,
+        storage_secret_name='minio',
+        storage_secret_access_key='user',
+        storage_secret_secret_key='password',
+        s3_endpoint=minio.endpoint,
+        skip_credential_subscoping=True,
     ),
     opts=pulumi.ResourceOptions(depends_on=[db[polaris_db]['instance'], polaris_secret]),
 )
