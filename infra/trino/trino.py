@@ -272,6 +272,8 @@ class Trino(pulumi.ComponentResource):
                     f'iceberg.rest-catalog.warehouse={cat.warehouse}',
                     'iceberg.rest-catalog.security=OAUTH2',
                     f'iceberg.rest-catalog.oauth2.credential={r["cred"]}',
+                    f'iceberg.rest-catalog.oauth2.scope=PRINCIPAL_ROLE:ALL',
+                    f'iceberg.rest-catalog.oauth2.server-uri={r["ep"]}/api/catalog/v1/oauth/tokens',
                     'fs.native-s3.enabled=true',
                     f's3.endpoint={r["s3ep"]}',
                     f's3.path-style-access={str(cat.s3_path_style_access).lower()}',
