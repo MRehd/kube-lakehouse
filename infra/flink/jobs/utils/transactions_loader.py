@@ -18,14 +18,18 @@ class FlinkTransactionsLoader:
         client_id     = os.getenv(f'POLARIS_{self.catalog.upper()}_CLIENT_ID', '')
         client_secret = os.getenv(f'POLARIS_{self.catalog.upper()}_CLIENT_SECRET', '')
 
+        # Drop and recreate to ensure our credentials take precedence over any
+        # catalog pre-registered from flinkConfiguration on the Java side.
+        self.t_env.execute_sql(f'DROP CATALOG IF EXISTS {self.catalog}')
         self.t_env.execute_sql(f"""
-            CREATE CATALOG IF NOT EXISTS {self.catalog} WITH (
+            CREATE CATALOG {self.catalog} WITH (
                 'type'                = 'iceberg',
                 'catalog-type'        = 'rest',
                 'uri'                 = '{os.getenv("POLARIS_ENDPOINT")}/api/catalog',
                 'warehouse'           = '{self.catalog}',
                 'credential'          = '{client_id}:{client_secret}',
                 'scope'               = 'PRINCIPAL_ROLE:ALL',
+                'oauth2-server-uri'   = '{os.getenv("POLARIS_ENDPOINT")}/api/catalog/v1/oauth/tokens',
                 's3.endpoint'         = '{os.getenv("S3_ENDPOINT")}',
                 's3.access-key'       = '{os.getenv("S3_ACCESS_KEY")}',
                 's3.secret-key'       = '{os.getenv("S3_SECRET_KEY")}',

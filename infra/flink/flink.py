@@ -319,22 +319,14 @@ class Flink(pulumi.ComponentResource):
         spec['job']['args']                         = ['-py', args.python_script]
         spec['job']['parallelism']                  = args.parallelism
 
-        # Build flinkConfiguration — catalog Input[str] values passed directly.
-        # Credentials come from per-catalog K8s Secrets mounted with a
-        # POLARIS_<CATALOG>_ prefix — Flink resolves ${ENV:POLARIS_BRONZE_CLIENT_ID}.
+        # Catalogs are registered at runtime by the Python job script via CREATE CATALOG SQL.
+        # We intentionally do NOT add table.catalog.* to flinkConfiguration because the JVM
+        # pre-registers them before the Python process starts — when Python then does
+        # CREATE CATALOG IF NOT EXISTS, it's a no-op and the JVM-side catalog (which may have
+        # unresolved credentials) takes precedence, causing 401s on table operations.
+        # Credentials are still mounted as POLARIS_<CATALOG>_CLIENT_ID/SECRET env vars so
+        # the Python CREATE CATALOG SQL can read them via os.getenv().
         flink_config: Dict[str, Input[str]] = {'pipeline.name': args.job_name}
-        for i, cat in enumerate(args.iceberg_catalogs):
-            prefix     = f'table.catalog.{cat.name}'
-            env_prefix = f'POLARIS_{cat.name.upper()}_'
-            flink_config[f'{prefix}.type']                 = 'iceberg'
-            flink_config[f'{prefix}.catalog-type']         = 'rest'
-            flink_config[f'{prefix}.uri']                  = Output.concat(cat_endpoints[i], '/api/catalog')
-            flink_config[f'{prefix}.warehouse']            = cat.warehouse
-            flink_config[f'{prefix}.credential']           = f'${{ENV:{env_prefix}CLIENT_ID}}:${{ENV:{env_prefix}CLIENT_SECRET}}'
-            flink_config[f'{prefix}.s3.endpoint']          = cat_s3eps[i]
-            flink_config[f'{prefix}.s3.access-key']        = cat_s3keys[i]
-            flink_config[f'{prefix}.s3.secret-key']        = cat_s3secs[i]
-            flink_config[f'{prefix}.s3.path-style-access'] = str(cat.s3_path_style_access).lower()
 
         if args.autoscaling_enabled:
             flink_config['job.autoscaler.enabled']                = 'true'

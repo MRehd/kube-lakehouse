@@ -325,7 +325,6 @@ polaris = Polaris(
         storage_secret_access_key='user',
         storage_secret_secret_key='password',
         s3_endpoint=minio.endpoint,
-        skip_credential_subscoping=True,
     ),
     opts=pulumi.ResourceOptions(depends_on=[db[polaris_db]['instance'], polaris_secret]),
 )
@@ -750,7 +749,7 @@ flink_image = docker.Image(
 flink_extra_config = {
     'execution.checkpointing.interval':                            '10s',
     'execution.checkpointing.externalized-checkpoint-retention':   'RETAIN_ON_CANCELLATION',
-    'state.checkpoints.dir':                                       's3://spark-logs/checkpoints',
+    'execution.checkpointing.dir':                                 's3a://spark-logs/checkpoints',
     'restart-strategy.type':                                       'exponential-delay',
     'restart-strategy.exponential-delay.initial-backoff':          '1 s',
     'restart-strategy.exponential-delay.max-backoff':              '5 min',
@@ -759,7 +758,7 @@ flink_extra_config = {
     's3.endpoint':          minio.endpoint,
     's3.access-key':        credentials['minio']['user'],
     's3.secret-key':        credentials['minio']['password'],
-    's3.path.style.access': 'true',
+    's3.path-style-access': 'true',
     's3.region':            s3_region,
 }
 

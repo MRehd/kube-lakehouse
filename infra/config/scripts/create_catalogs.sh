@@ -35,7 +35,8 @@ create_catalog() {
     "allowedLocations": ["s3://$bucket/"],
     "endpoint": "$endpoint",
     "region": "$region",
-    "pathStyleAccess": $path_style
+    "pathStyleAccess": $path_style,
+    "stsUnavailable": true
   }
 }
 EOF
@@ -49,7 +50,17 @@ EOF
   if [ "$http_code" = "201" ] || [ "$http_code" = "200" ]; then
     echo "Catalog $name created successfully"
   elif [ "$http_code" = "409" ]; then
-    echo "Catalog $name already exists, skipping"
+    echo "Catalog $name already exists, updating storageConfigInfo..."
+    http_code2=$(curl -s -o /tmp/catalog_upd_resp.json -w "%{http_code}" -X PUT "$POLARIS_URL/api/management/v1/catalogs/$name" \
+      -H "Authorization: Bearer $TOKEN" \
+      -H 'Content-Type: application/json' \
+      -d "$payload")
+    if [ "$http_code2" = "200" ] || [ "$http_code2" = "204" ]; then
+      echo "Catalog $name updated successfully"
+    else
+      echo "WARNING: Update returned HTTP $http_code2 (may not support PUT), skipping"
+      cat /tmp/catalog_upd_resp.json
+    fi
   else
     echo "ERROR: Failed to create catalog $name (HTTP $http_code)"
     cat /tmp/catalog_resp.json

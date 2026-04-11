@@ -345,11 +345,13 @@ class Polaris(pulumi.ComponentResource):
             {'name': 'AWS_REGION',            'value': args.s3_region},
             {'name': 'AWS_ACCESS_KEY_ID',     'valueFrom': {'secretKeyRef': {'name': args.storage_secret_name, 'key': args.storage_secret_access_key}}},
             {'name': 'AWS_SECRET_ACCESS_KEY', 'valueFrom': {'secretKeyRef': {'name': args.storage_secret_name, 'key': args.storage_secret_secret_key}}},
-            {'name': 'AWS_ENDPOINT_URL_S3', 'value': args.s3_endpoint},
+            # AWS_ENDPOINT_URL_S3 routes Polaris's own AWS SDK calls to MinIO when
+            # storageConfigInfo.stsUnavailable=true is used (instead of SKIP_CREDENTIAL_SUBSCOPING_INDIRECTION).
+            # With stsUnavailable=true, Polaris skips STS but still populates s3.endpoint and
+            # s3.path-style-access from storageConfigInfo into the FileIO properties — so the
+            # env var is only needed for operations that fall outside the catalog FileIO path.
+            {'name': 'AWS_ENDPOINT_URL_S3',   'value': args.s3_endpoint},
         ]
-
-        if args.skip_credential_subscoping:
-            values['features'] = {'SKIP_CREDENTIAL_SUBSCOPING_INDIRECTION': True}
 
         if args.persistence_type == 'relational-jdbc':
             values['persistence'] = {
