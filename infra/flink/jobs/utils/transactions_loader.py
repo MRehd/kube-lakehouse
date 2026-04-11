@@ -34,7 +34,8 @@ class FlinkTransactionsLoader:
                 's3.access-key'       = '{os.getenv("S3_ACCESS_KEY")}',
                 's3.secret-key'       = '{os.getenv("S3_SECRET_KEY")}',
                 's3.path-style-access'= 'true',
-                's3.region'           = '{os.getenv("S3_REGION")}'
+                's3.region'           = '{os.getenv("S3_REGION")}',
+                'io-impl'             = 'org.apache.iceberg.aws.s3.S3FileIO'
             )
         """)
         self.t_env.execute_sql(f'USE CATALOG {self.catalog}')

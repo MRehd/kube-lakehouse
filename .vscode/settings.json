@@ -1,5 +1,20 @@
 {
   "files.associations": {
     "**/config/scripts/*.sql": "plaintext"
-  }
+  },
+  "sqltools.connections": [
+    {
+      "trinoOptions": {
+        "ssl": {
+          "rejectUnauthorized": true
+        }
+      },
+      "previewLimit": 50,
+      "driver": "Trino Driver",
+      "name": "k8lh-bronze-dev",
+      "server": "http://trino.k8lh.local:80",
+      "catalog": "bronze",
+      "user": "admin"
+    }
+  ]
 }
