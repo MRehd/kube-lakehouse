@@ -239,16 +239,11 @@ class Spark(pulumi.ComponentResource):
             )
             cs_spec['template']['spec']['initContainers'][0]['command'][2] += iceberg_jar_downloads
 
-            # Deduped envFrom entries for credential secrets (prefixed per catalog)
-            seen_secrets: set = set()
-            conf_env_from = []
-            for cat in args.iceberg_catalogs:
-                if cat.credentials_secret not in seen_secrets:
-                    conf_env_from.append({
-                        'secretRef': {'name': cat.credentials_secret},
-                        'prefix':    f'POLARIS_{cat.name.upper()}_',
-                    })
-                    seen_secrets.add(cat.credentials_secret)
+            # Single envFrom entry — all catalogs share one principal's credentials.
+            conf_env_from = [{
+                'secretRef': {'name': args.iceberg_catalogs[0].credentials_secret},
+                'prefix':    'POLARIS_',
+            }]
 
             # Build the conf script as a plain string — catalog names/warehouses are
             # ordinary Python values. Output values (endpoint, S3 config, credentials)
@@ -258,15 +253,14 @@ class Spark(pulumi.ComponentResource):
                 'echo "spark.sql.extensions=org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions"',
             ]
             for cat in args.iceberg_catalogs:
-                n      = cat.name
-                prefix = f'POLARIS_{n.upper()}'
-                ps     = str(cat.s3_path_style_access).lower()
+                n  = cat.name
+                ps = str(cat.s3_path_style_access).lower()
                 script_lines += [
                     f'echo "spark.sql.catalog.{n}=org.apache.iceberg.spark.SparkCatalog"',
                     f'echo "spark.sql.catalog.{n}.catalog-impl=org.apache.iceberg.rest.RESTCatalog"',
                     f'echo "spark.sql.catalog.{n}.uri=${{POLARIS_ENDPOINT}}/api/catalog"',
                     f'echo "spark.sql.catalog.{n}.warehouse={cat.warehouse}"',
-                    f'echo "spark.sql.catalog.{n}.credential=${{{prefix}_CLIENT_ID}}:${{{prefix}_CLIENT_SECRET}}"',
+                    f'echo "spark.sql.catalog.{n}.credential=${{POLARIS_CLIENT_ID}}:${{POLARIS_CLIENT_SECRET}}"',
                     f'echo "spark.sql.catalog.{n}.scope=PRINCIPAL_ROLE:ALL"',
                     f'echo "spark.sql.catalog.{n}.oauth2-server-uri=${{POLARIS_ENDPOINT}}/api/catalog/v1/oauth/tokens"',
                     f'echo "spark.sql.catalog.{n}.s3.endpoint=${{S3_ENDPOINT}}"',
