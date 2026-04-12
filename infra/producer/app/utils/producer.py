@@ -173,9 +173,9 @@ class CryptoProducer:
         if time_diff_sec < self.buffer:
           wait_time = self.buffer - time_diff_sec
           if wait_time > 0:
-            time.sleep(wait_time)
+            await asyncio.sleep(wait_time)
           else:
-            time.sleep(1)
+            await asyncio.sleep(1)
 
         self.end_time = datetime.utcnow().strftime(self.format_str)
 

@@ -37,9 +37,9 @@ Example:
 '''
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 import pulumi
 from pulumi import Input, Output
@@ -51,6 +51,30 @@ CONFIG_DIR = Path(__file__).parent.parent / 'config'
 
 CONNECT_SERVER_PORT = 15002
 HISTORY_SERVER_PORT = 18080
+
+
+@dataclass
+class SparkIcebergCatalogArgs:
+    '''An Iceberg REST catalog (via Polaris) to register in the Spark Connect server.'''
+
+    name: str
+    '''Catalog name as it appears in Spark SQL (e.g. "bronze").'''
+
+    polaris_endpoint: Input[str]
+    '''Base URL of the Polaris service. Accepts a Pulumi Output.'''
+
+    warehouse: str
+    '''Catalog name in Polaris used as the Iceberg warehouse.'''
+
+    credentials_secret: str
+    '''
+    K8s Secret name containing CLIENT_ID and CLIENT_SECRET for this catalog's
+    Polaris principal. Mounted as env vars with a per-catalog prefix
+    POLARIS_<CATALOG>_ on the Connect server pod.
+    '''
+
+    s3_path_style_access: bool = True
+    '''Use path-style S3 access (required for MinIO).'''
 
 
 @dataclass
@@ -113,6 +137,14 @@ class SparkArgs:
     ingress_class_name: Input[str] = 'nginx'
     '''Ingress class name.'''
 
+    iceberg_catalogs: List[SparkIcebergCatalogArgs] = field(default_factory=list)
+    '''
+    Iceberg REST catalogs to register in the Spark Connect server.
+    Configuration is injected via spark-defaults.conf generated at pod startup.
+    Credentials are read from K8s Secrets mounted as env vars — never embedded
+    in the pod spec.
+    '''
+
 
 class Spark(pulumi.ComponentResource):
     '''
@@ -160,6 +192,7 @@ class Spark(pulumi.ComponentResource):
         ingress_domain       = Output.from_input(args.ingress_domain)
         release              = args.release_name or name
         image                = Output.concat(Output.from_input(args.image), ':', Output.from_input(args.image_tag))
+        cat_endpoints        = [Output.from_input(c.polaris_endpoint) for c in args.iceberg_catalogs]
 
         # ── Spark Connect Server ───────────────────────────────────────────────
         cs_name      = f'{release}-connect'
@@ -194,6 +227,91 @@ class Spark(pulumi.ComponentResource):
         cs_spec['template']['spec']['initContainers'][0]['image'] = image
         cs_spec['template']['spec']['containers'][0]['image']     = image
         cs_spec['template']['spec']['containers'][0]['args']      = connect_args
+
+        # ── Iceberg catalog setup (optional) ──────────────────────────────────
+        if args.iceberg_catalogs:
+            # Append Iceberg JARs to the existing jar-download init container
+            iceberg_jar_downloads = (
+                ' && curl -fL -o /extra-jars/iceberg-spark-runtime.jar'
+                ' https://repo1.maven.org/maven2/org/apache/iceberg/iceberg-spark-runtime-4.0_2.13/1.10.1/iceberg-spark-runtime-4.0_2.13-1.10.1.jar'
+                ' && curl -fL -o /extra-jars/iceberg-aws-bundle.jar'
+                ' https://repo1.maven.org/maven2/org/apache/iceberg/iceberg-aws-bundle/1.10.1/iceberg-aws-bundle-1.10.1.jar'
+            )
+            cs_spec['template']['spec']['initContainers'][0]['command'][2] += iceberg_jar_downloads
+
+            # Deduped envFrom entries for credential secrets (prefixed per catalog)
+            seen_secrets: set = set()
+            conf_env_from = []
+            for cat in args.iceberg_catalogs:
+                if cat.credentials_secret not in seen_secrets:
+                    conf_env_from.append({
+                        'secretRef': {'name': cat.credentials_secret},
+                        'prefix':    f'POLARIS_{cat.name.upper()}_',
+                    })
+                    seen_secrets.add(cat.credentials_secret)
+
+            # Build the conf script as a plain string — catalog names/warehouses are
+            # ordinary Python values. Output values (endpoint, S3 config, credentials)
+            # are referenced as shell variables substituted at container runtime.
+            script_lines = [
+                'set -e', '{',
+                'echo "spark.sql.extensions=org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions"',
+            ]
+            for cat in args.iceberg_catalogs:
+                n      = cat.name
+                prefix = f'POLARIS_{n.upper()}'
+                ps     = str(cat.s3_path_style_access).lower()
+                script_lines += [
+                    f'echo "spark.sql.catalog.{n}=org.apache.iceberg.spark.SparkCatalog"',
+                    f'echo "spark.sql.catalog.{n}.catalog-impl=org.apache.iceberg.rest.RESTCatalog"',
+                    f'echo "spark.sql.catalog.{n}.uri=${{POLARIS_ENDPOINT}}/api/catalog"',
+                    f'echo "spark.sql.catalog.{n}.warehouse={cat.warehouse}"',
+                    f'echo "spark.sql.catalog.{n}.credential=${{{prefix}_CLIENT_ID}}:${{{prefix}_CLIENT_SECRET}}"',
+                    f'echo "spark.sql.catalog.{n}.scope=PRINCIPAL_ROLE:ALL"',
+                    f'echo "spark.sql.catalog.{n}.oauth2-server-uri=${{POLARIS_ENDPOINT}}/api/catalog/v1/oauth/tokens"',
+                    f'echo "spark.sql.catalog.{n}.s3.endpoint=${{S3_ENDPOINT}}"',
+                    f'echo "spark.sql.catalog.{n}.s3.access-key=${{S3_ACCESS_KEY}}"',
+                    f'echo "spark.sql.catalog.{n}.s3.secret-key=${{S3_SECRET_KEY}}"',
+                    f'echo "spark.sql.catalog.{n}.s3.path-style-access={ps}"',
+                    f'echo "spark.sql.catalog.{n}.s3.region=${{S3_REGION}}"',
+                    f'echo "spark.sql.catalog.{n}.io-impl=org.apache.iceberg.aws.s3.S3FileIO"',
+                ]
+            script_lines.append('} > /spark-conf/spark-defaults.conf')
+            conf_script = '\n'.join(script_lines)
+
+            # Output.all() is only needed to inject the Output-typed values as env vars.
+            # All catalogs share one Polaris instance, so a single POLARIS_ENDPOINT suffices.
+            setup_conf_container = Output.all(
+                ep=cat_endpoints[0], s3ep=s3_endpoint, s3key=s3_access_key, s3sec=s3_secret_key, s3reg=s3_region,
+            ).apply(lambda r: {
+                'name':    'setup-conf',
+                'image':   'busybox:1.36',
+                'command': ['sh', '-c', conf_script],
+                'env': [
+                    {'name': 'POLARIS_ENDPOINT', 'value': r['ep']},
+                    {'name': 'S3_ENDPOINT',      'value': r['s3ep']},
+                    {'name': 'S3_ACCESS_KEY',    'value': r['s3key']},
+                    {'name': 'S3_SECRET_KEY',    'value': r['s3sec']},
+                    {'name': 'S3_REGION',        'value': r['s3reg']},
+                ],
+                'envFrom':      conf_env_from,
+                'volumeMounts': [{'name': 'spark-conf', 'mountPath': '/spark-conf'}],
+            })
+            cs_spec['template']['spec']['initContainers'].append(setup_conf_container)
+
+            # spark-conf volume shared between setup-conf init container and main container
+            cs_spec['template']['spec']['volumes'].append({'name': 'spark-conf', 'emptyDir': {}})
+
+            # Mount spark-conf on the main container and point SPARK_CONF_DIR at it.
+            # Also mount the credential secrets so the Connect server can log/reload them.
+            main_container = cs_spec['template']['spec']['containers'][0]
+            main_container.setdefault('volumeMounts', []).append(
+                {'name': 'spark-conf', 'mountPath': '/spark-conf'}
+            )
+            main_container.setdefault('env', []).append(
+                {'name': 'SPARK_CONF_DIR', 'value': '/spark-conf'}
+            )
+            main_container.setdefault('envFrom', []).extend(conf_env_from)
 
         Deployment(
             f'{name}-connect-server',

@@ -40,6 +40,10 @@ kubectl describe pod minio-k8lh-dev-0 -n k8lh
 # Delete pod (controller recreates it)
 kubectl delete pod minio-k8lh-dev-0 -n k8lh
 
+# Remove dangling ns
+python -c "namespace='ns-k8lh-dev';import atexit,subprocess,json,requests,sys;proxy_process = subprocess.Popen(['kubectl', 'proxy']);atexit.register(proxy_process.kill);p = subprocess.Popen(['kubectl', 'get', 'namespace', namespace, '-o', 'json'], stdout=subprocess.PIPE);p.wait();data = json.load(p.stdout);data['spec']['finalizers'] = [];requests.put('http://127.0.0.1:8001/api/v1/namespaces/{}/finalize'.format(namespace), json=data).raise_for_status()"
+
+
 # Hosts
 C:\Windows\System32\drivers\etc\hosts
 
@@ -47,12 +51,15 @@ C:\Windows\System32\drivers\etc\hosts
 127.0.0.1 minio-console.k8lh.local
 127.0.0.1 polaris.k8lh.local
 127.0.0.1 kafka-ui.k8lh.local
+127.0.0.1 trino.k8lh.local (connect via http://trino.k8lh.local:80)
 127.0.0.1 spark.k8lh.local
-127.0.0.1 producer.k8lh.local
 127.0.0.1 airflow.k8lh.local
 127.0.0.1 flink-btc.k8lh.local
 127.0.0.1 flink-eth.k8lh.local
 127.0.0.1 flink-transactions.k8lh.local
+192.168.1.9 host.docker.internal
+192.168.1.9 gateway.docker.internal
+127.0.0.1 kubernetes.docker.internal
 
 
 # Start docker local registry

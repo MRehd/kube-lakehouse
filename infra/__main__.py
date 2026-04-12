@@ -37,7 +37,7 @@ from psql import DatabaseArgs, GrantArgs, Psql, PsqlArgs, UserArgs
 from trino import Trino, TrinoArgs, TrinoAutoscalingArgs, TrinoIcebergCatalogArgs
 from flink import Flink, FlinkArgs, FlinkIcebergCatalogArgs, FlinkJobArgs
 from producer import Producer, ProducerArgs
-from spark import Spark, SparkArgs
+from spark import Spark, SparkArgs, SparkIcebergCatalogArgs
 from airflow import Airflow, AirflowArgs, AirflowConnectionArgs
 from secrets import LakehouseSecrets, SecretArgs
 from service_accounts import PolicyRuleArgs, ServiceAccountArgs, ServiceAccounts, ServiceAccountsArgs
@@ -636,6 +636,11 @@ spark = Spark(
         ingress_enabled=True,
         ingress_domain=domain,
         ingress_class_name='nginx',
+        iceberg_catalogs=[
+            SparkIcebergCatalogArgs(name='bronze', polaris_endpoint=polaris.endpoint, warehouse='bronze', credentials_secret=spark_credentials_secret),
+            SparkIcebergCatalogArgs(name='silver', polaris_endpoint=polaris.endpoint, warehouse='silver', credentials_secret=spark_credentials_secret),
+            SparkIcebergCatalogArgs(name='gold',   polaris_endpoint=polaris.endpoint, warehouse='gold',   credentials_secret=spark_credentials_secret),
+        ],
     ),
     opts=pulumi.ResourceOptions(depends_on=[ns, ingress_nginx, minio, spark_sa, polaris_principals]),
 )
