@@ -1,0 +1,18 @@
+encryptionsalt: v1:V0FlpuA073k=:v1:pl3xOtNBYOSuyBPN:0WbXQkLnZNNfsJSXJor8n4weNnlqkA==
+config:
+  k8lh:minio_root_password:
+    secure: v1:moeTx3sV7aF9TSY2:ZiTPuPE18vNjI55G17e0XnjJ573gebGCNKA=
+  k8lh:postgres_admin_password:
+    secure: v1:ZR0OepANQZ+19igQ:qPx2WGeTonVx7mC7doAT35Zb0gWS72EdGwI=
+  k8lh:polaris_postgres_password:
+    secure: v1:xN/ywpcTgfKEhFPz:dlAs6gYCvmS66IpRyxEEphrOw63l1hM=
+  k8lh:airflow_postgres_password:
+    secure: v1:iFEYM+fhcxBtHYYM:vKuhG97ufCRUPxnT4NTFpfqQe2hvUYM=
+  k8lh:airflow_admin_password:
+    secure: v1:uf9Yk5WryceDff+o:ngu8q5NSdll/m7tB0T/OIwfJ2V4y
+  k8lh:airflow_fernet_key:
+    secure: v1:JrIi/8x+StAdJduV:HqwE4FKg+oSnbxmH2RlcrkhqkyJgpfiCQsR49MEdMeQprWMv2PgRvWCJFV+Phzu5b5lqT5mMyhH3fF4z
+  k8lh:airflow_webserver_secret_key:
+    secure: v1:RJABeAsUrIxwZR/D:RpHlt1crRoZRI512H7udodynUvc/FKrcTBtLRp7f/IMQB6HC5l/955RYcu5KOjWIJ6jwKOlO6hwUZzQT6506YAeokhm+w8iPoMP650bEQF4=
+  k8lh:airflow_git_token:
+    secure: v1:8J5X/XipxACXzt5g:gslVzjzYpXmrnIl9WufzB4U/4MXpH7CWbeBJZM6MNQ5KGoNTwAaUHgV3i+TusEMjfR/INOzMQniixZijafdWg8cqzQe06c1NKqdVri3sqJ9PPSv9nHgamvjCU2AGI5AJpslVd3Rk2wu1nyc1BA==

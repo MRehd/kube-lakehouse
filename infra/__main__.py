@@ -326,7 +326,7 @@ polaris = Polaris(
         storage_secret_secret_key='password',
         s3_endpoint=minio.endpoint,
     ),
-    opts=pulumi.ResourceOptions(depends_on=[db[polaris_db]['instance'], polaris_secret]),
+    opts=pulumi.ResourceOptions(depends_on=[db[polaris_db]['instance'], polaris_secret, ingress_nginx]),
 )
 
 # Bootstrap Polaris: creates database schema and root principal credentials
@@ -447,7 +447,7 @@ kafka_ui = KafkaUi(
         ingress_domain=domain,
         ingress_class_name='nginx',
     ),
-    opts=pulumi.ResourceOptions(depends_on=[kafka]),
+    opts=pulumi.ResourceOptions(depends_on=[kafka, ingress_nginx]),
 )
 
 
@@ -457,18 +457,18 @@ kafka_ui = KafkaUi(
 
 # Deploy the KEDA operator for event-driven worker scaling.
 # KEDA watches Kafka consumer group lag and adjusts worker replica counts.
-keda_name = f'keda-{project_name}-{env}'
-keda = Keda(
-    keda_name,
-    KedaArgs(
-        namespace=ns.metadata.name,
-        release_name=keda_name,
-        operator_replicas=2,
-        metrics_server_replicas=1,
-        watch_namespace='',  # Watch all namespaces
-    ),
-    opts=pulumi.ResourceOptions(depends_on=[ns, ingress_nginx]),
-)
+# keda_name = f'keda-{project_name}-{env}'
+# keda = Keda(
+#     keda_name,
+#     KedaArgs(
+#         namespace=ns.metadata.name,
+#         release_name=keda_name,
+#         operator_replicas=2,
+#         metrics_server_replicas=1,
+#         watch_namespace='',  # Watch all namespaces
+#     ),
+#     opts=pulumi.ResourceOptions(depends_on=[ns, ingress_nginx]),
+# )
 
 # Uncomment and adapt when adding compute workers:
 #
@@ -594,7 +594,7 @@ trino = Trino(
             ),
         ],
     ),
-    opts=pulumi.ResourceOptions(depends_on=[polaris_bootstrap, minio, polaris_principals]),
+    opts=pulumi.ResourceOptions(depends_on=[polaris_bootstrap, minio, polaris_principals, ingress_nginx]),
 )
 
 # =============================================================================
@@ -734,7 +734,7 @@ flink = Flink(
         namespace=ns.metadata.name,
         release_name=flink_name,
     ),
-    opts=pulumi.ResourceOptions(depends_on=[ns]),
+    opts=pulumi.ResourceOptions(depends_on=[ns, ingress_nginx]),
 )
 
 flink_image = docker.Image(
@@ -843,7 +843,7 @@ pulumi.export('trino_endpoint', trino.endpoint)
 pulumi.export('trino_url', trino.ui_url)
 
 # KEDA
-pulumi.export('keda_namespace', keda.namespace)
+# pulumi.export('keda_namespace', keda.namespace)
 
 # Producer
 pulumi.export('producer_url', producer.url)

@@ -40,9 +40,17 @@ kubectl describe pod minio-k8lh-dev-0 -n k8lh
 # Delete pod (controller recreates it)
 kubectl delete pod minio-k8lh-dev-0 -n k8lh
 
+# Delete context
+kubectl config delete-context docker-desktop
+
 # Remove dangling ns
+kubectl get namespace ns-k8lh-dev -o json | python -c "import sys,json; d=json.load(sys.stdin); d['spec']['finalizers']=[]; print(json.dumps(d))" | kubectl replace --raw /api/v1/namespaces/ns-k8lh-dev/finalize -f -
+
 python -c "namespace='ns-k8lh-dev';import atexit,subprocess,json,requests,sys;proxy_process = subprocess.Popen(['kubectl', 'proxy']);atexit.register(proxy_process.kill);p = subprocess.Popen(['kubectl', 'get', 'namespace', namespace, '-o', 'json'], stdout=subprocess.PIPE);p.wait();data = json.load(p.stdout);data['spec']['finalizers'] = [];requests.put('http://127.0.0.1:8001/api/v1/namespaces/{}/finalize'.format(namespace), json=data).raise_for_status()"
 
+kubectl delete validatingwebhookconfiguration inginx-k8lh-dev-ingress-nginx-admission
+
+kubectl delete validatingwebhookconfiguration keda-admission 2>&1
 
 # Hosts
 C:\Windows\System32\drivers\etc\hosts
