@@ -55,16 +55,19 @@ kubectl delete validatingwebhookconfiguration keda-admission 2>&1
 # Hosts
 C:\Windows\System32\drivers\etc\hosts
 
+All available at port 8080
+
 127.0.0.1 minio.k8lh.local
 127.0.0.1 minio-console.k8lh.local
 127.0.0.1 polaris.k8lh.local
 127.0.0.1 kafka-ui.k8lh.local
-127.0.0.1 trino.k8lh.local (connect via http://trino.k8lh.local:80)
+127.0.0.1 trino.k8lh.local
 127.0.0.1 spark.k8lh.local
 127.0.0.1 airflow.k8lh.local
 127.0.0.1 flink-btc.k8lh.local
 127.0.0.1 flink-eth.k8lh.local
 127.0.0.1 flink-transactions.k8lh.local
+127.0.0.1 producer.k8lh.local
 192.168.1.9 host.docker.internal
 192.168.1.9 gateway.docker.internal
 127.0.0.1 kubernetes.docker.internal

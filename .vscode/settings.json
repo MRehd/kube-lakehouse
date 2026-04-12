@@ -12,7 +12,7 @@
       "previewLimit": 50,
       "driver": "Trino Driver",
       "name": "k8lh-bronze-dev",
-      "server": "http://trino.k8lh.local:80",
+      "server": "http://trino.k8lh.local:8080",
       "catalog": "bronze",
       "user": "admin"
     }

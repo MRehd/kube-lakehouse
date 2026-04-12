@@ -131,18 +131,12 @@ ingress_nginx = Chart(
         values={
             'controller': {
                 'service': {
-                    'type': 'NodePort',
-                },
-                'hostPort': {
-                    'enabled': True,
-                },
-                'admissionWebhooks': {
-                    'enabled': False,
-                },
-                'publishService': {
-                    'enabled': False,
-                },
-                'publishStatusAddress': 'localhost',
+                    'type': 'LoadBalancer',
+                    'ports': {
+                        'http': 8080,
+                        'https': 8443,
+                    }
+                }
             },
         },
     ),
