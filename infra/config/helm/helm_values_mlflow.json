@@ -1,0 +1,29 @@
+{
+  "fullnameOverride": "",
+  "replicaCount": 1,
+  "service": {
+    "type": "ClusterIP",
+    "port": 80,
+    "containerPort": 5000
+  },
+  "resources": {
+    "requests": { "cpu": "200m", "memory": "256Mi" },
+    "limits":   { "cpu": "500m", "memory": "512Mi" }
+  },
+  "backendStore": {
+    "postgres": {
+      "enabled": true,
+      "port": 5432
+    }
+  },
+  "artifactRoot": {
+    "s3": {
+      "enabled": true
+    }
+  },
+  "ingress": {
+    "enabled": false,
+    "className": "nginx",
+    "hosts": []
+  }
+}

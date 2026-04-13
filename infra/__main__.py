@@ -39,6 +39,7 @@ from flink import Flink, FlinkArgs, FlinkIcebergCatalogArgs, FlinkJobArgs
 from producer import Producer, ProducerArgs
 from spark import Spark, SparkArgs, SparkIcebergCatalogArgs
 from airflow import Airflow, AirflowArgs, AirflowConnectionArgs
+from mlflow import Mlflow, MlflowArgs
 from secrets import LakehouseSecrets, SecretArgs
 from service_accounts import PolicyRuleArgs, ServiceAccountArgs, ServiceAccounts, ServiceAccountsArgs
 
@@ -74,6 +75,10 @@ credentials = {
         'fernet_key': config.require_secret('airflow_fernet_key'),
         'webserver_secret_key': config.require_secret('airflow_webserver_secret_key'),
         'git_token': config.require_secret('airflow_git_token'),
+    },
+    'mlflow': {
+        'user': config.require('mlflow_postgres_user'),
+        'password': config.require_secret('mlflow_postgres_password'),
     },
 }
 
@@ -175,7 +180,8 @@ minio.create_buckets(
         BucketArgs(name='bronze', versioning=True),      # Raw data
         BucketArgs(name='silver', versioning=True),      # Cleaned data
         BucketArgs(name='gold', versioning=True),        # Aggregated data
-        BucketArgs(name='spark-logs', versioning=False), # Spark event logs for History Server
+        BucketArgs(name='spark-logs', versioning=False),    # Spark event logs for History Server
+        BucketArgs(name='mlflow-artifacts', versioning=False), # MLflow artifact store
     ],
 )
 
@@ -201,6 +207,7 @@ psql = Psql(
 # Database names for each service
 airflow_db = 'airflow'
 polaris_db = 'polaris'
+mlflow_db  = 'mlflow'
 
 # Database specifications: each service gets its own database and user
 db_specs = [
@@ -221,6 +228,17 @@ db_specs = [
             UserArgs(
                 name=polaris_creds['user'],
                 password=polaris_creds['password'],
+                login=True,
+                superuser=False,
+            ),
+        ],
+    },
+    {
+        'db': DatabaseArgs(name=mlflow_db, owner=credentials['mlflow']['user']),
+        'users': [
+            UserArgs(
+                name=credentials['mlflow']['user'],
+                password=credentials['mlflow']['password'],
                 login=True,
                 superuser=False,
             ),
@@ -697,6 +715,14 @@ airflow = Airflow(
         ingress_enabled=True,
         ingress_domain=domain,
         ingress_class_name='nginx',
+        pip_packages=[
+            'apache-airflow-providers-apache-spark',
+            f'pyspark=={spark.spark_version}',
+            'numpy',
+            'pandas',
+            'scipy',
+            'mlflow'
+        ],
         env={
             # Kafka
             'KAFKA_BOOTSTRAP_SERVERS': kafka.bootstrap_servers,
@@ -816,6 +842,30 @@ for job_name, script in [
         ),
         opts=pulumi.ResourceOptions(depends_on=[polaris_principals, flink_image]),
     )
+
+
+# =============================================================================
+# MLFLOW - EXPERIMENT TRACKING
+# =============================================================================
+
+mlflow = Mlflow(
+    f'mlflow-{project_name}-{env}',
+    MlflowArgs(
+        namespace=ns.metadata.name,
+        postgres_host=psql.host,
+        postgres_db=mlflow_db,
+        postgres_user=credentials['mlflow']['user'],
+        postgres_password=credentials['mlflow']['password'],
+        s3_endpoint=minio.endpoint,
+        s3_bucket='mlflow-artifacts',
+        s3_access_key=credentials['minio']['user'],
+        s3_secret_key=credentials['minio']['password'],
+        ingress_enabled=True,
+        ingress_domain=domain,
+        ingress_class_name='nginx',
+    ),
+    opts=pulumi.ResourceOptions(depends_on=[ns, ingress_nginx, db[mlflow_db]['instance'], minio]),
+)
 
 
 # =============================================================================

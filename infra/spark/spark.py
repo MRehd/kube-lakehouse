@@ -191,6 +191,7 @@ class Spark(pulumi.ComponentResource):
         event_log_bucket     = Output.from_input(args.event_log_bucket)
         ingress_domain       = Output.from_input(args.ingress_domain)
         release              = args.release_name or name
+        self.spark_version   = Output.from_input(args.image_tag)
         image                = Output.concat(Output.from_input(args.image), ':', Output.from_input(args.image_tag))
         cat_endpoints        = [Output.from_input(c.polaris_endpoint) for c in args.iceberg_catalogs]
 
@@ -402,4 +403,5 @@ class Spark(pulumi.ComponentResource):
             'namespace':          self.namespace,
             'connect_server_url': self.connect_server_url,
             'history_server_url': self.history_server_url,
+            'spark_version':      self.spark_version,
         })

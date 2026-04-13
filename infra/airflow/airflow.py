@@ -39,7 +39,7 @@ Example:
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 import json
 import yaml
@@ -159,6 +159,12 @@ class AirflowArgs:
     Use for credentials that should not appear in Helm values (e.g. S3 access keys).
     '''
 
+    pip_packages: List[str] = field(default_factory=list)
+    '''
+    Python packages to install in Airflow pods (scheduler, webserver, workers).
+    Passed as _PIP_EXTRA_REQUIREMENTS_ — installed at pod startup by the Airflow entrypoint.
+    '''
+
     connections: list = field(default_factory=list)
     '''
     List of AirflowConnectionArgs. Each becomes AIRFLOW_CONN_<ID_UPPER>=<uri>,
@@ -262,6 +268,10 @@ class Airflow(pulumi.ComponentResource):
 
         if args.env_secrets:
             v['extraEnvFrom'] = yaml.dump([{'secretRef': {'name': s}} for s in args.env_secrets])
+
+        if args.pip_packages:
+            pip_entry = {'name': '_PIP_EXTRA_REQUIREMENTS_', 'value': ' '.join(args.pip_packages)}
+            v['env'] = v.get('env', []) + [pip_entry]
 
         if args.ingress_enabled and args.ingress_domain:
             v['ingress'] = {'apiServer': {

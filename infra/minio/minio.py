@@ -1,5 +1,5 @@
 '''
-MinIO on Kubernetes — Bitnami Helm chart.
+MinIO on Kubernetes — Helm chart.
 
 Deploys MinIO object storage and exposes create_buckets() to provision
 buckets via a Kubernetes Job using the MinIO Client (mc).
