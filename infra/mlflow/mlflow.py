@@ -140,6 +140,11 @@ class Mlflow(pulumi.ComponentResource):
         if args.ingress_enabled and args.ingress_domain:
             v['ingress']['hosts'] = [{'host': Output.concat('mlflow.', Output.from_input(args.ingress_domain)), 'paths': [{'path': '/', 'pathType': 'ImplementationSpecific'}]}]
 
+        def ignore_generated_secret_data(t: pulumi.ResourceTransformArgs) -> pulumi.ResourceTransformResult:
+            if t.type_ == 'kubernetes:core/v1:Secret':
+                t.opts.ignore_changes = ['data']
+            return pulumi.ResourceTransformResult(props=t.props, opts=t.opts)
+
         self.chart = Chart(
             f'{name}-chart',
             ChartOpts(
@@ -149,7 +154,7 @@ class Mlflow(pulumi.ComponentResource):
                 fetch_opts=FetchOpts(repo='https://community-charts.github.io/helm-charts'),
                 values=v,
             ),
-            opts=pulumi.ResourceOptions(parent=self),
+            opts=pulumi.ResourceOptions(parent=self, transforms=[ignore_generated_secret_data]),
         )
 
         self.namespace = self._namespace

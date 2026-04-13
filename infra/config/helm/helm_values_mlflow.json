@@ -25,5 +25,12 @@
     "enabled": false,
     "className": "nginx",
     "hosts": []
+  },
+  "log": {
+    "enabled": false
+  },
+  "extraArgs": {
+    "allowedHosts": "*",
+    "uvicornOpts": "--log-level info"
   }
 }
