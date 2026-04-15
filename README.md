@@ -69,6 +69,8 @@ All available at port 8080
 127.0.0.1 flink-transactions.k8lh.local
 127.0.0.1 producer.k8lh.local
 127.0.0.1 mlflow.k8lh.local
+127.0.0.1 ollama.k8lh.local
+127.0.0.1 chat.k8lh.local
 
 192.168.1.9 host.docker.internal
 192.168.1.9 gateway.docker.internal

@@ -1,0 +1,43 @@
+{
+  "fullnameOverride": "",
+  "replicaCount": 1,
+  "image": {
+    "tag": "latest"
+  },
+  "ollama": {
+    "gpu": {
+      "enable": false,
+      "nbrGpu": 1
+    }
+  },
+  "service": {
+    "type": "ClusterIP",
+    "port": 11434
+  },
+  "resources": {
+    "requests": { "cpu": "1000m", "memory": "2Gi" }
+  },
+  "persistentVolume": {
+    "enabled": true,
+    "size": "30Gi"
+  },
+  "ingress": {
+    "enabled": false,
+    "className": "nginx",
+    "hosts": []
+  },
+  "livenessProbe": {
+    "enabled": true,
+    "initialDelaySeconds": 60,
+    "periodSeconds": 10,
+    "timeoutSeconds": 5,
+    "failureThreshold": 6
+  },
+  "readinessProbe": {
+    "enabled": true,
+    "initialDelaySeconds": 30,
+    "periodSeconds": 5,
+    "timeoutSeconds": 3,
+    "failureThreshold": 6
+  }
+}

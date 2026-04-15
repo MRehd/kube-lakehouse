@@ -40,6 +40,8 @@ from producer import Producer, ProducerArgs
 from spark import Spark, SparkArgs, SparkIcebergCatalogArgs
 from airflow import Airflow, AirflowArgs, AirflowConnectionArgs
 from mlflow import Mlflow, MlflowArgs
+from ollama import Ollama, OllamaArgs
+from open_webui import OpenWebUI, OpenWebUIArgs
 from secrets import LakehouseSecrets, SecretArgs
 from service_accounts import PolicyRuleArgs, ServiceAccountArgs, ServiceAccounts, ServiceAccountsArgs
 
@@ -865,6 +867,39 @@ mlflow = Mlflow(
         ingress_class_name='nginx',
     ),
     opts=pulumi.ResourceOptions(depends_on=[ns, ingress_nginx, db[mlflow_db]['instance'], minio]),
+)
+
+
+# =============================================================================
+# OLLAMA
+# =============================================================================
+
+ollama = Ollama(
+    f'ollama-{project_name}-{env}',
+    OllamaArgs(
+        namespace=ns.metadata.name,
+        gpu_enabled=False,
+        storage_enabled=True,
+        storage_size='30Gi',
+        ingress_enabled=True,
+        ingress_domain=domain,
+        ingress_class_name='nginx',
+    ),
+    opts=pulumi.ResourceOptions(depends_on=[ns, ingress_nginx]),
+)
+
+ollama.pull_model('qwen3.5:latest')
+
+open_webui = OpenWebUI(
+    f'open-webui-{project_name}-{env}',
+    OpenWebUIArgs(
+        namespace=ns.metadata.name,
+        ollama_endpoint=ollama.endpoint,
+        ingress_enabled=True,
+        ingress_domain=domain,
+        ingress_class_name='nginx',
+    ),
+    opts=pulumi.ResourceOptions(depends_on=[ns, ingress_nginx, ollama]),
 )
 
 
