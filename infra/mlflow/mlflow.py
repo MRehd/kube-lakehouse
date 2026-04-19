@@ -138,7 +138,7 @@ class Mlflow(pulumi.ComponentResource):
         v['ingress']['enabled']   = args.ingress_enabled
         v['ingress']['className'] = args.ingress_class_name
         if args.ingress_enabled and args.ingress_domain:
-            v['ingress']['hosts'] = [{'host': Output.concat('mlflow.', Output.from_input(args.ingress_domain)), 'paths': [{'path': '/', 'pathType': 'ImplementationSpecific'}]}]
+            v['ingress']['hosts'] = [{'host': f'mlflow.{args.ingress_domain}', 'paths': [{'path': '/', 'pathType': 'ImplementationSpecific'}]}]
 
         def ignore_generated_secret_data(t: pulumi.ResourceTransformArgs) -> pulumi.ResourceTransformResult:
             if t.type_ == 'kubernetes:core/v1:Secret':
@@ -162,7 +162,7 @@ class Mlflow(pulumi.ComponentResource):
             'http://', release, '.', self._namespace, '.svc.cluster.local:80'
         )
         self.ui_url = (
-            Output.concat('http://mlflow.', Output.from_input(args.ingress_domain))
+            f'http://mlflow.{args.ingress_domain}'
             if args.ingress_enabled and args.ingress_domain
             else self.endpoint
         )
