@@ -734,6 +734,9 @@ airflow = Airflow(
             'S3_SECRET_KEY': credentials['minio']['password'],
             # Polaris
             'POLARIS_ENDPOINT': polaris.endpoint,
+            # Expose the rendered airflow.cfg in the UI (Admin → Configurations)
+            'AIRFLOW__WEBSERVER__EXPOSE_CONFIG': 'True',
+            'AIRFLOW__API__EXPOSE_CONFIG':       'True',
         },
         # Mounts CLIENT_ID and CLIENT_SECRET from the Polaris spark principal secret
         env_secrets=[spark_credentials_secret],

@@ -162,7 +162,7 @@ class AirflowArgs:
     pip_packages: List[str] = field(default_factory=list)
     '''
     Python packages to install in Airflow pods (scheduler, webserver, workers).
-    Passed as _PIP_EXTRA_REQUIREMENTS_ — installed at pod startup by the Airflow entrypoint.
+    Passed as _PIP_ADDITIONAL_REQUIREMENTS — installed at pod startup by the Airflow entrypoint.
     '''
 
     connections: list = field(default_factory=list)
@@ -270,7 +270,7 @@ class Airflow(pulumi.ComponentResource):
             v['extraEnvFrom'] = yaml.dump([{'secretRef': {'name': s}} for s in args.env_secrets])
 
         if args.pip_packages:
-            pip_entry = {'name': '_PIP_EXTRA_REQUIREMENTS_', 'value': ' '.join(args.pip_packages)}
+            pip_entry = {'name': '_PIP_ADDITIONAL_REQUIREMENTS', 'value': ' '.join(args.pip_packages)}
             v['env'] = v.get('env', []) + [pip_entry]
 
         if args.ingress_enabled and args.ingress_domain:
