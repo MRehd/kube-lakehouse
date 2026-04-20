@@ -6,9 +6,15 @@
   },
   "ollama": {
     "gpu": {
-      "enable": false,
-      "nbrGpu": 1
+      "enabled": false,
+      "number": 1,
+      "type": "nvidia",
+      "nvidiaResource": "nvidia.com/gpu"
     }
+  },
+  "knative": {
+    "enabled": false,
+    "containerConcurrency": 1
   },
   "service": {
     "type": "ClusterIP",
@@ -39,5 +45,15 @@
     "periodSeconds": 5,
     "timeoutSeconds": 3,
     "failureThreshold": 6
-  }
+  },
+  "env": [
+    {
+      "name": "NVIDIA_VISIBLE_DEVICES",
+      "value": "all"
+    },
+    {
+      "name": "NVIDIA_DRIVER_CAPABILITIES",
+      "value": "compute,utility"
+    }
+  ]
 }

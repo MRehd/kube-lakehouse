@@ -53,10 +53,10 @@ class OllamaArgs:
     gpu_count: int = 1
     '''Number of GPUs to request per pod.'''
 
-    cpu_request: str = '1000m'
+    cpu_request: str = '5000m'
     '''CPU request.'''
 
-    memory_request: str = '2Gi'
+    memory_request: str = '10Gi'
     '''Memory request. Ollama loads models entirely into RAM when no GPU.'''
 
     storage_enabled: bool = True
@@ -106,8 +106,10 @@ class Ollama(pulumi.ComponentResource):
 
         v = json.loads((CONFIG_DIR / 'helm/helm_values_ollama.json').read_text())
         v['fullnameOverride']                   = release
-        v['ollama']['gpu']['enable']            = args.gpu_enabled
-        v['ollama']['gpu']['nbrGpu']            = args.gpu_count
+        v['ollama']['gpu']['enabled']            = args.gpu_enabled
+        v['ollama']['gpu']['number']            = args.gpu_count
+        v['ollama']['gpu']['type']              = 'nvidia'
+        v['ollama']['gpu']['nvidiaResource']    = 'nvidia.com/gpu'
         v['resources']['requests']['cpu']       = args.cpu_request
         v['resources']['requests']['memory']    = args.memory_request
         v['persistentVolume']['enabled']        = args.storage_enabled

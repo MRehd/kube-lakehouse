@@ -878,7 +878,7 @@ ollama = Ollama(
     f'ollama-{project_name}-{env}',
     OllamaArgs(
         namespace=ns.metadata.name,
-        gpu_enabled=False,
+        gpu_enabled=True,
         storage_enabled=True,
         storage_size='30Gi',
         ingress_enabled=True,
