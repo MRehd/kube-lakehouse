@@ -738,10 +738,7 @@ airflow = Airflow(
         # Mounts CLIENT_ID and CLIENT_SECRET from the Polaris spark principal secret
         env_secrets=[spark_credentials_secret],
         connections=[
-            AirflowConnectionArgs(
-                conn_id='spark_default',
-                uri=spark.connect_server_url,
-            ),
+            AirflowConnectionArgs(conn_id='spark_default', uri=spark.connect_server_url),
         ],
         extra_values={
             'scheduler': {
@@ -874,33 +871,33 @@ mlflow = Mlflow(
 # OLLAMA
 # =============================================================================
 
-ollama = Ollama(
-    f'ollama-{project_name}-{env}',
-    OllamaArgs(
-        namespace=ns.metadata.name,
-        gpu_enabled=True,
-        storage_enabled=True,
-        storage_size='30Gi',
-        ingress_enabled=True,
-        ingress_domain=domain,
-        ingress_class_name='nginx',
-    ),
-    opts=pulumi.ResourceOptions(depends_on=[ns, ingress_nginx]),
-)
+# ollama = Ollama(
+#     f'ollama-{project_name}-{env}',
+#     OllamaArgs(
+#         namespace=ns.metadata.name,
+#         gpu_enabled=True,
+#         storage_enabled=True,
+#         storage_size='30Gi',
+#         ingress_enabled=True,
+#         ingress_domain=domain,
+#         ingress_class_name='nginx',
+#     ),
+#     opts=pulumi.ResourceOptions(depends_on=[ns, ingress_nginx]),
+# )
 
-ollama.pull_model('qwen3.5:latest')
+# ollama.pull_model('qwen3.5:latest')
 
-open_webui = OpenWebUI(
-    f'open-webui-{project_name}-{env}',
-    OpenWebUIArgs(
-        namespace=ns.metadata.name,
-        ollama_endpoint=ollama.endpoint,
-        ingress_enabled=True,
-        ingress_domain=domain,
-        ingress_class_name='nginx',
-    ),
-    opts=pulumi.ResourceOptions(depends_on=[ns, ingress_nginx, ollama]),
-)
+# open_webui = OpenWebUI(
+#     f'open-webui-{project_name}-{env}',
+#     OpenWebUIArgs(
+#         namespace=ns.metadata.name,
+#         ollama_endpoint=ollama.endpoint,
+#         ingress_enabled=True,
+#         ingress_domain=domain,
+#         ingress_class_name='nginx',
+#     ),
+#     opts=pulumi.ResourceOptions(depends_on=[ns, ingress_nginx, ollama]),
+# )
 
 
 # =============================================================================
