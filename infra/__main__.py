@@ -25,6 +25,7 @@ Usage:
 
 import pulumi
 import pulumi_docker as docker
+from pulumi import Output
 from pulumi_kubernetes.core.v1 import Namespace
 from pulumi_kubernetes.helm.v3 import Chart, ChartOpts, FetchOpts
 
@@ -42,6 +43,7 @@ from airflow import Airflow, AirflowArgs, AirflowConnectionArgs
 from mlflow import Mlflow, MlflowArgs
 from ollama import Ollama, OllamaArgs
 from open_webui import OpenWebUI, OpenWebUIArgs
+from mcp import Mcp, McpArgs
 from secrets import LakehouseSecrets, SecretArgs
 from service_accounts import PolicyRuleArgs, ServiceAccountArgs, ServiceAccounts, ServiceAccountsArgs
 
@@ -642,6 +644,35 @@ producer = Producer(
 
 
 # =============================================================================
+# MCP - TRINO QUERY TOOL FOR AI AGENTS
+# =============================================================================
+
+# FastMCP server exposing a `query` tool over MCP HTTP transport.
+# Reads Trino connection info from env vars and forwards SQL via the official
+# trino python SDK. Lets agents (Open WebUI, Claude, etc.) query the lakehouse.
+mcp_name = f'mcp-{project_name}-{env}'
+mcp = Mcp(
+    mcp_name,
+    McpArgs(
+        namespace=ns.metadata.name,
+        image_name=config.require('docker_mcp_image_name'),
+        registry_username=config.require('docker_registry_username'),
+        registry_password=config.require_secret('docker_registry_password'),
+        env={
+            'TRINO_HOST':    Output.concat(trino_name, '.', ns.metadata.name, '.svc.cluster.local'),
+            'TRINO_PORT':    '8080',
+            'TRINO_USER':    'mcp',
+            'TRINO_CATALOG': 'bronze',
+        },
+        ingress_enabled=True,
+        ingress_domain=domain,
+        ingress_class_name='nginx',
+    ),
+    opts=pulumi.ResourceOptions(depends_on=[ns, ingress_nginx, trino]),
+)
+
+
+# =============================================================================
 # APACHE SPARK - BATCH PROCESSING
 # =============================================================================
 
@@ -718,12 +749,12 @@ airflow = Airflow(
         ingress_domain=domain,
         ingress_class_name='nginx',
         pip_packages=[
-            'apache-airflow-providers-apache-spark',
-            f'pyspark=={spark.spark_version}',
-            'numpy',
-            'pandas',
-            'scipy',
-            'mlflow'
+            'apache-airflow-providers-apache-spark==5.2.2',
+            'pyspark==4.0.0',
+            'numpy==1.26.4',
+            'pandas==2.2.3',
+            'scipy==1.14.1',
+            'mlflow==2.18.0'
         ],
         env={
             # Kafka
@@ -734,6 +765,8 @@ airflow = Airflow(
             'S3_SECRET_KEY': credentials['minio']['password'],
             # Polaris
             'POLARIS_ENDPOINT': polaris.endpoint,
+            # Producer
+            'PRODUCER_BASE_URL': producer.endpoint,
             # Expose the rendered airflow.cfg in the UI (Admin → Configurations)
             'AIRFLOW__WEBSERVER__EXPOSE_CONFIG': 'True',
             'AIRFLOW__API__EXPOSE_CONFIG':       'True',
