@@ -749,12 +749,11 @@ airflow = Airflow(
         ingress_domain=domain,
         ingress_class_name='nginx',
         pip_packages=[
-            'apache-airflow-providers-apache-spark==5.2.2',
+            'apache-airflow-providers-apache-spark==6.0.1',
             'pyspark==4.0.0',
-            'numpy==1.26.4',
-            'pandas==2.2.3',
-            'scipy==1.14.1',
-            'mlflow==2.18.0'
+            'numpy==2.4.4',
+            'polars==1.40.0',
+            'mlflow==3.11.1'
         ],
         env={
             # Kafka
