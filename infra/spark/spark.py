@@ -112,10 +112,10 @@ class SparkArgs:
     and pass the output here.
     '''
 
-    connect_master: Input[str] = 'k8s://https://kubernetes.default.svc:443'
+    connect_master: Input[str] = 'k8s://kubernetes.default.svc:443'
     '''
     Spark master URL for the Connect server.
-    - "k8s://https://kubernetes.default.svc:443" — spawn executor pods via K8s (default)
+    - "k8s://kubernetes.default.svc:443" — spawn executor pods via K8s (default)
     - "local[*]"                                 — all computation inside the Connect pod (dev only)
     When using k8s://, executors are created in the same namespace using the same
     image and ServiceAccount. Dynamic allocation tears them down when idle.
@@ -264,6 +264,8 @@ class Spark(pulumi.ComponentResource):
             '--conf', Output.concat('spark.kubernetes.namespace=', self._namespace),
             '--conf', Output.concat('spark.kubernetes.authenticate.driver.serviceAccountName=', service_account_name),
             '--conf', Output.concat('spark.kubernetes.container.image=', image),
+            '--conf', 'spark.sql.adaptive.enabled=true',
+            '--conf', 'spark.sql.adaptive.coalescePartitions.enabled=true',
             '--conf', 'spark.dynamicAllocation.enabled=true',
             '--conf', 'spark.dynamicAllocation.shuffleTracking.enabled=true',
             '--conf', 'spark.dynamicAllocation.minExecutors=0',
@@ -321,8 +323,8 @@ class Spark(pulumi.ComponentResource):
                     f'echo "spark.sql.catalog.{n}.scope=PRINCIPAL_ROLE:ALL"',
                     f'echo "spark.sql.catalog.{n}.oauth2-server-uri=${{POLARIS_ENDPOINT}}/api/catalog/v1/oauth/tokens"',
                     f'echo "spark.sql.catalog.{n}.s3.endpoint=${{S3_ENDPOINT}}"',
-                    f'echo "spark.sql.catalog.{n}.s3.access-key=${{S3_ACCESS_KEY}}"',
-                    f'echo "spark.sql.catalog.{n}.s3.secret-key=${{S3_SECRET_KEY}}"',
+                    f'echo "spark.sql.catalog.{n}.s3.access-key-id=${{S3_ACCESS_KEY}}"',
+                    f'echo "spark.sql.catalog.{n}.s3.secret-access-key=${{S3_SECRET_KEY}}"',
                     f'echo "spark.sql.catalog.{n}.s3.path-style-access={ps}"',
                     f'echo "spark.sql.catalog.{n}.s3.region=${{S3_REGION}}"',
                     f'echo "spark.sql.catalog.{n}.io-impl=org.apache.iceberg.aws.s3.S3FileIO"',

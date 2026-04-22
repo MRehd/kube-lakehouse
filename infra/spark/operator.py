@@ -273,16 +273,18 @@ class SparkOperator(pulumi.ComponentResource):
         # without waiting for job completion (combined with a low
         # spark.history.fs.update.interval on the History Server side).
         spark_conf: Dict[str, Input[str]] = {
-            'spark.hadoop.fs.s3a.endpoint':            s3_endpoint,
-            'spark.hadoop.fs.s3a.access.key':          s3_access_key,
-            'spark.hadoop.fs.s3a.secret.key':          s3_secret_key,
-            'spark.hadoop.fs.s3a.endpoint.region':     s3_region,
-            'spark.hadoop.fs.s3a.path.style.access':   'true',
-            'spark.hadoop.fs.s3a.impl':                'org.apache.hadoop.fs.s3a.S3AFileSystem',
-            'spark.eventLog.enabled':                  'true',
-            'spark.eventLog.dir':                      Output.concat('s3a://', event_log_bucket, '/'),
-            'spark.eventLog.rolling.enabled':          'true',
-            'spark.eventLog.rolling.maxFileSize':      '64m',
+            'spark.hadoop.fs.s3a.endpoint':                  s3_endpoint,
+            'spark.hadoop.fs.s3a.access.key':                s3_access_key,
+            'spark.hadoop.fs.s3a.secret.key':                s3_secret_key,
+            'spark.hadoop.fs.s3a.endpoint.region':           s3_region,
+            'spark.hadoop.fs.s3a.path.style.access':         'true',
+            'spark.hadoop.fs.s3a.impl':                      'org.apache.hadoop.fs.s3a.S3AFileSystem',
+            'spark.eventLog.enabled':                        'true',
+            'spark.eventLog.dir':                            Output.concat('s3a://', event_log_bucket, '/'),
+            'spark.eventLog.rolling.enabled':                'true',
+            'spark.eventLog.rolling.maxFileSize':            '64m',
+            'spark.sql.adaptive.enabled':                    'true',
+            'spark.sql.adaptive.coalescePartitions.enabled':  'true'
         }
 
         if args.iceberg_catalogs:
@@ -301,8 +303,8 @@ class SparkOperator(pulumi.ComponentResource):
                     f'spark.sql.catalog.{n}.scope':            'PRINCIPAL_ROLE:ALL',
                     f'spark.sql.catalog.{n}.oauth2-server-uri': Output.concat(Output.from_input(cat.polaris_endpoint), '/api/catalog/v1/oauth/tokens'),
                     f'spark.sql.catalog.{n}.s3.endpoint':      s3_endpoint,
-                    f'spark.sql.catalog.{n}.s3.access-key':    s3_access_key,
-                    f'spark.sql.catalog.{n}.s3.secret-key':    s3_secret_key,
+                    f'spark.sql.catalog.{n}.s3.access-key-id':     s3_access_key,
+                    f'spark.sql.catalog.{n}.s3.secret-access-key': s3_secret_key,
                     f'spark.sql.catalog.{n}.s3.path-style-access': ps,
                     f'spark.sql.catalog.{n}.s3.region':        s3_region,
                     f'spark.sql.catalog.{n}.io-impl':          'org.apache.iceberg.aws.s3.S3FileIO',

@@ -1,6 +1,7 @@
 apache-airflow-providers-apache-spark
 apache-airflow-providers-cncf-kubernetes
 pyspark
+zstandard
 numpy
 polars
 mlflow

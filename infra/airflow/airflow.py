@@ -184,7 +184,7 @@ class AirflowArgs:
     Use for credentials that should not appear in Helm values (e.g. S3 access keys).
     '''
 
-    airflow_version: str = '3.1.8'
+    airflow_version: str = '3.2.0'
     '''
     Airflow version. Passed as a build arg to the custom image (FROM
     apache/airflow:<version>-python<py>) and used to build the pip constraints

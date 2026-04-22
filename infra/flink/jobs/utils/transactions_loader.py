@@ -31,8 +31,8 @@ class FlinkTransactionsLoader:
                 'scope'               = 'PRINCIPAL_ROLE:ALL',
                 'oauth2-server-uri'   = '{os.getenv("POLARIS_ENDPOINT")}/api/catalog/v1/oauth/tokens',
                 's3.endpoint'         = '{os.getenv("S3_ENDPOINT")}',
-                's3.access-key'       = '{os.getenv("S3_ACCESS_KEY")}',
-                's3.secret-key'       = '{os.getenv("S3_SECRET_KEY")}',
+                's3.access-key-id'    = '{os.getenv("S3_ACCESS_KEY")}',
+                's3.secret-access-key'= '{os.getenv("S3_SECRET_KEY")}',
                 's3.path-style-access'= 'true',
                 's3.region'           = '{os.getenv("S3_REGION")}',
                 'io-impl'             = 'org.apache.iceberg.aws.s3.S3FileIO'

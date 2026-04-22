@@ -298,15 +298,17 @@ polaris_provisioner_sa = sas.provision(
     ),
 )
 
-# SA for Spark driver/executor pods — needs pod/service/configmap CRUD
+# SA for Spark driver/executor pods — needs CRUD on the K8s objects the driver
+# spawns and tears down. `deletecollection` is required for shutdown: the driver
+# bulk-deletes its child pods/services/PVCs by label selector.
 spark_sa = sas.provision(
     f'spark-{project_name}-{env}',
     ServiceAccountArgs(
         name='spark',
         rules=[
             PolicyRuleArgs(
-                resources=['pods', 'services', 'configmaps'],
-                verbs=['create', 'get', 'list', 'watch', 'delete', 'patch', 'update'],
+                resources=['pods', 'services', 'configmaps', 'persistentvolumeclaims'],
+                verbs=['create', 'get', 'list', 'watch', 'delete', 'deletecollection', 'patch', 'update'],
             ),
         ],
     ),
@@ -691,7 +693,7 @@ spark = Spark(
         image_name=config.require('docker_spark_image_name'),
         registry_username=config.require('docker_registry_username'),
         registry_password=config.require_secret('docker_registry_password'),
-        connect_master='k8s://https://kubernetes.default.svc:443',
+        connect_master='k8s://kubernetes.default.svc:443',
         s3_endpoint=minio.endpoint,
         s3_access_key=credentials['minio']['user'],
         s3_secret_key=credentials['minio']['password'],
