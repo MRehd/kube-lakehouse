@@ -1,0 +1,9 @@
+ARG SPARK_VERSION=4.0.0
+FROM apache/spark:${SPARK_VERSION}
+
+USER root
+
+COPY requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.txt
+
+USER 185

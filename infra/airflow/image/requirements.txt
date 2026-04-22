@@ -1,0 +1,7 @@
+apache-airflow-providers-apache-spark
+apache-airflow-providers-cncf-kubernetes
+pyspark
+numpy
+polars
+mlflow
+scipy

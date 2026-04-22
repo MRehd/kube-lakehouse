@@ -1,19 +1,17 @@
 '''
-Apache Spark on Kubernetes — Connect server + History Server.
+Apache Spark Connect on Kubernetes.
 
-Deploys two components:
+Deploys the Spark Connect server (port 15002) — a persistent gRPC endpoint
+that Airflow workers connect to via the @task.pyspark decorator or directly
+with pyspark.sql.SparkSession. Runs as a standalone Deployment; executor pods
+are created on demand by the Spark K8s scheduler (k8s:// master) and destroyed
+when idle. Uses dynamic allocation: minExecutors=0, maxExecutors=N.
 
-  Spark Connect Server (port 15002)
-    A persistent gRPC endpoint that Airflow workers connect to via the
-    @task.pyspark decorator or directly with pyspark.sql.SparkSession.
-    Runs as a standalone Deployment; executor pods are created on demand
-    by the Spark K8s scheduler (k8s:// master) and destroyed when idle.
-    Uses dynamic allocation: minExecutors=0, maxExecutors=N.
-
-  Spark History Server (port 18080)
-    A passive log reader that scans the spark-logs MinIO bucket and presents
-    completed/running job history. Jobs appear here automatically because the
-    Connect server writes event logs to s3a://spark-logs/.
+The Spark History Server lives in a sibling component (SparkHistory) so it can
+be shared with the SparkOperator. Both Connect and operator-managed jobs write
+event logs to the same s3a://<event_log_bucket>/ path, and the History Server
+reads from there. Rolling event logs are enabled so in-flight runs surface in
+the UI without waiting for job completion.
 
 Airflow integration:
     Pass spark.connect_server_url as a connection URI to Airflow:
@@ -42,15 +40,15 @@ from pathlib import Path
 from typing import List, Optional
 
 import pulumi
+import pulumi_docker as docker
 from pulumi import Input, Output
 from pulumi_kubernetes.apps.v1 import Deployment
 from pulumi_kubernetes.core.v1 import Service
-from pulumi_kubernetes.networking.v1 import Ingress
 
-CONFIG_DIR = Path(__file__).parent.parent / 'config'
+CONFIG_DIR    = Path(__file__).parent.parent / 'config'
+BUILD_CONTEXT = str(Path(__file__).parent / 'image')
 
 CONNECT_SERVER_PORT = 15002
-HISTORY_SERVER_PORT = 18080
 
 
 @dataclass
@@ -87,11 +85,24 @@ class SparkArgs:
     release_name: Optional[str] = None
     '''Resource name prefix for K8s resources. Defaults to the Pulumi resource name.'''
 
-    image: Input[str] = 'apache/spark'
-    '''Docker image for both the Connect server and History Server.'''
+    image_name: Input[str] = ''
+    '''
+    Full image name without tag for the custom Spark image, e.g. "docker.io/myuser/spark".
+    Built from infra/spark/image/ (FROM apache/spark with extra Python deps baked in).
+    Used everywhere — Connect server, History Server, and executor pods.
+    '''
 
     image_tag: Input[str] = '4.0.0'
-    '''Image tag.'''
+    '''Image tag — also passed as the SPARK_VERSION build arg (FROM apache/spark:<tag>).'''
+
+    registry_username: Input[str] = ''
+    '''Docker registry username.'''
+
+    registry_password: Input[str] = ''
+    '''Docker registry password or access token. Accepts a Pulumi secret Output.'''
+
+    registry_server: Input[str] = 'https://index.docker.io/v1/'
+    '''Docker registry server URL.'''
 
     service_account_name: Input[str] = 'spark'
     '''
@@ -113,8 +124,30 @@ class SparkArgs:
     executor_instances: int = 4
     '''Maximum executor pods for dynamic allocation (maxExecutors). minExecutors is always 0.'''
 
+    executor_memory: Input[str] = '1g'
+    '''JVM heap per executor (spark.executor.memory). Pod memory request adds ~10% overhead.'''
+
+    executor_cores: int = 1
+    '''Task slots per executor (spark.executor.cores).'''
+
+    executor_request_cores: Input[str] = '500m'
+    '''K8s CPU request per executor pod. Lower than limit for bursty workloads.'''
+
+    executor_limit_cores: Input[str] = '1'
+    '''K8s CPU limit per executor pod. Should be >= executor_cores.'''
+
+    driver_memory: Input[str] = '1g'
+    '''JVM heap for the Connect server (spark.driver.memory).'''
+
+    driver_cores: int = 1
+    '''CPU cores for the Connect server driver (spark.driver.cores).'''
+
     event_log_bucket: Input[str] = 'spark-logs'
-    '''MinIO bucket where the Connect server writes Spark event logs.'''
+    '''
+    MinIO bucket where the Connect server writes Spark event logs.
+    Point the SparkHistory component at the same bucket so its UI surfaces
+    every Connect-driven run.
+    '''
 
     s3_endpoint: Input[str] = ''
     '''S3/MinIO endpoint URL. Accepts a Pulumi Output.'''
@@ -128,15 +161,6 @@ class SparkArgs:
     s3_region: Input[str] = 'us-east-1'
     '''S3/MinIO region.'''
 
-    ingress_enabled: bool = False
-    '''Create an Ingress for the History Server UI.'''
-
-    ingress_domain: Input[str] = ''
-    '''Base domain. Creates spark.<domain> → History Server.'''
-
-    ingress_class_name: Input[str] = 'nginx'
-    '''Ingress class name.'''
-
     iceberg_catalogs: List[SparkIcebergCatalogArgs] = field(default_factory=list)
     '''
     Iceberg REST catalogs to register in the Spark Connect server.
@@ -148,19 +172,20 @@ class SparkArgs:
 
 class Spark(pulumi.ComponentResource):
     '''
-    Deploys a Spark Connect server and a Spark History Server on Kubernetes.
+    Deploys a Spark Connect server on Kubernetes.
 
     The Connect server acts as the Spark master for interactive/programmatic
     sessions. It spawns executor pods on demand via the K8s scheduler and
     releases them when idle (dynamic allocation). Zero idle worker cost.
 
-    The History Server is a passive read-only UI that reads event logs from
-    the spark-logs MinIO bucket — no connection to the Connect server needed.
+    Event logs are written to s3a://<event_log_bucket>/ with rolling enabled
+    so in-flight runs are visible in the SparkHistory UI within seconds.
 
     Outputs:
-        namespace           — Kubernetes namespace
-        connect_server_url  — sc://<host>:<port> URI for Spark Connect clients
-        history_server_url  — http://<host>:<port> URL for the History Server UI
+        namespace          — Kubernetes namespace
+        image              — Full image ref (used by SparkHistory and SparkOperator jobs)
+        connect_server_url — sc://<host>:<port> URI for Spark Connect clients
+        connect_ui_url     — http://<host>[:port] URL for the Connect driver UI
 
     Example:
         spark = Spark('spark', SparkArgs(
@@ -189,11 +214,34 @@ class Spark(pulumi.ComponentResource):
         service_account_name = Output.from_input(args.service_account_name)
         connect_master       = Output.from_input(args.connect_master)
         event_log_bucket     = Output.from_input(args.event_log_bucket)
-        ingress_domain       = Output.from_input(args.ingress_domain)
         release              = args.release_name or name
         self.spark_version   = Output.from_input(args.image_tag)
-        image                = Output.concat(Output.from_input(args.image), ':', Output.from_input(args.image_tag))
+        image_name           = Output.from_input(args.image_name)
+        image_tag            = Output.from_input(args.image_tag)
+        full_image           = Output.concat(image_name, ':', image_tag)
         cat_endpoints        = [Output.from_input(c.polaris_endpoint) for c in args.iceberg_catalogs]
+
+        # Build a custom Spark image from infra/spark/image/ — bakes Python deps
+        # (numpy, polars, mlflow, ...) on top of apache/spark:<tag> so they're
+        # available on both the Connect server and the executor pods it spawns.
+        image_obj = docker.Image(
+            f'{name}-image',
+            image_name=full_image,
+            build=docker.DockerBuildArgs(
+                context=BUILD_CONTEXT,
+                dockerfile=f'{BUILD_CONTEXT}/dockerfile',
+                args={'SPARK_VERSION': image_tag},
+                platform='linux/amd64',
+            ),
+            registry=docker.RegistryArgs(
+                server=Output.from_input(args.registry_server),
+                username=Output.from_input(args.registry_username),
+                password=Output.from_input(args.registry_password),
+            ),
+            opts=pulumi.ResourceOptions(parent=self),
+        )
+        image      = image_obj.image_name
+        self.image = image
 
         # ── Spark Connect Server ───────────────────────────────────────────────
         cs_name      = f'{release}-connect'
@@ -204,6 +252,8 @@ class Spark(pulumi.ComponentResource):
             '--master', connect_master,
             '--conf', 'spark.eventLog.enabled=true',
             '--conf', Output.concat('spark.eventLog.dir=s3a://', event_log_bucket, '/'),
+            '--conf', 'spark.eventLog.rolling.enabled=true',
+            '--conf', 'spark.eventLog.rolling.maxFileSize=64m',
             '--conf', Output.concat('spark.hadoop.fs.s3a.endpoint=', s3_endpoint),
             '--conf', Output.concat('spark.hadoop.fs.s3a.access.key=', s3_access_key),
             '--conf', Output.concat('spark.hadoop.fs.s3a.secret.key=', s3_secret_key),
@@ -219,6 +269,12 @@ class Spark(pulumi.ComponentResource):
             '--conf', 'spark.dynamicAllocation.minExecutors=0',
             '--conf', f'spark.dynamicAllocation.maxExecutors={args.executor_instances}',
             '--conf', 'spark.dynamicAllocation.executorIdleTimeout=60s',
+            '--conf', Output.concat('spark.executor.memory=',                  Output.from_input(args.executor_memory)),
+            '--conf', f'spark.executor.cores={args.executor_cores}',
+            '--conf', Output.concat('spark.kubernetes.executor.request.cores=', Output.from_input(args.executor_request_cores)),
+            '--conf', Output.concat('spark.kubernetes.executor.limit.cores=',   Output.from_input(args.executor_limit_cores)),
+            '--conf', Output.concat('spark.driver.memory=',                    Output.from_input(args.driver_memory)),
+            '--conf', f'spark.driver.cores={args.driver_cores}',
         ]
 
         cs_spec = json.loads((CONFIG_DIR / 'resources/spark_connect_spec.json').read_text())
@@ -333,75 +389,19 @@ class Spark(pulumi.ComponentResource):
             '.svc.cluster.local:', str(CONNECT_SERVER_PORT),
         )
 
-        # ── History Server ────────────────────────────────────────────────────
-        hs_name      = f'{release}-history-server'
-        hs_app_label = {'app': hs_name}
-
-        spark_history_opts = Output.concat(
-            '-Dspark.history.fs.logDirectory=s3a://', event_log_bucket, '/ ',
-            '-Dspark.hadoop.fs.s3a.endpoint=', s3_endpoint, ' ',
-            '-Dspark.hadoop.fs.s3a.access.key=', s3_access_key, ' ',
-            '-Dspark.hadoop.fs.s3a.secret.key=', s3_secret_key, ' ',
-            '-Dspark.hadoop.fs.s3a.path.style.access=true ',
-            '-Dspark.hadoop.fs.s3a.endpoint.region=', s3_region, ' ',
-            '-Dspark.hadoop.fs.s3a.impl=org.apache.hadoop.fs.s3a.S3AFileSystem',
+        # The live Connect driver UI (port 4040) is not exposed via Ingress —
+        # use the SparkHistory UI for run inspection (rolling event logs surface
+        # in-flight runs within seconds), or port-forward for real-time:
+        #   kubectl port-forward deployment/<cs_name> 4040:4040
+        self.connect_ui_url = Output.concat(
+            'http://', cs_name, '.', self._namespace, '.svc.cluster.local:4040',
         )
-
-        hs_spec = json.loads((CONFIG_DIR / 'resources/history_server_spec.json').read_text())
-        hs_spec['selector']['matchLabels']                        = hs_app_label
-        hs_spec['template']['metadata']['labels']                 = hs_app_label
-        hs_spec['template']['spec']['initContainers'][0]['image'] = image
-        hs_spec['template']['spec']['containers'][0]['image']     = image
-        hs_spec['template']['spec']['containers'][0]['env'][0]['value'] = spark_history_opts
-
-        Deployment(
-            f'{name}-history-server',
-            metadata={'name': hs_name, 'namespace': self._namespace},
-            spec=hs_spec,
-            opts=pulumi.ResourceOptions(parent=self),
-        )
-
-        Service(
-            f'{name}-history-server-svc',
-            metadata={'name': hs_name, 'namespace': self._namespace},
-            spec={
-                'selector': hs_app_label,
-                'ports': [{'port': HISTORY_SERVER_PORT, 'targetPort': HISTORY_SERVER_PORT}],
-            },
-            opts=pulumi.ResourceOptions(parent=self),
-        )
-
-        # ── History Server Ingress (optional) ─────────────────────────────────
-        if args.ingress_enabled and args.ingress_domain:
-            host = Output.concat('spark.', ingress_domain)
-
-            ingress_spec = json.loads((CONFIG_DIR / 'resources/ingress_spec.json').read_text())
-            ingress_spec['ingressClassName']                                                     = args.ingress_class_name
-            ingress_spec['rules'][0]['host']                                                     = host
-            ingress_spec['rules'][0]['http']['paths'][0]['backend']['service']['name']           = hs_name
-            ingress_spec['rules'][0]['http']['paths'][0]['backend']['service']['port']['number'] = HISTORY_SERVER_PORT
-
-            Ingress(
-                f'{name}-history-server-ingress',
-                metadata={
-                    'name':        f'{hs_name}-ingress',
-                    'namespace':   self._namespace,
-                    'annotations': {'kubernetes.io/ingress.class': args.ingress_class_name},
-                },
-                spec=ingress_spec,
-                opts=pulumi.ResourceOptions(parent=self),
-            )
-            self.history_server_url = Output.concat('http://', host)
-        else:
-            self.history_server_url = Output.concat(
-                'http://', hs_name, '.', self._namespace,
-                '.svc.cluster.local:', str(HISTORY_SERVER_PORT),
-            )
 
         self.namespace = self._namespace
         self.register_outputs({
             'namespace':          self.namespace,
+            'image':              self.image,
             'connect_server_url': self.connect_server_url,
-            'history_server_url': self.history_server_url,
+            'connect_ui_url':     self.connect_ui_url,
             'spark_version':      self.spark_version,
         })

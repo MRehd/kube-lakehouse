@@ -1,0 +1,31 @@
+{
+  "type": "Python",
+  "pythonVersion": "3",
+  "mode": "cluster",
+  "image": "",
+  "imagePullPolicy": "Always",
+  "mainApplicationFile": "",
+  "sparkVersion": "4.0.0",
+  "restartPolicy": {
+    "type": "OnFailure",
+    "onFailureRetries": 3,
+    "onFailureRetryInterval": 10,
+    "onSubmissionFailureRetries": 3,
+    "onSubmissionFailureRetryInterval": 20
+  },
+  "driver": {
+    "cores": 1,
+    "memory": "1g",
+    "serviceAccount": "spark",
+    "env": [],
+    "envFrom": []
+  },
+  "executor": {
+    "cores": 5,
+    "instances": 2,
+    "memory": "5g",
+    "env": [],
+    "envFrom": []
+  },
+  "sparkConf": {}
+}

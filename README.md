@@ -113,6 +113,9 @@ pulumi config set --secret airflow_postgres_password "airflow"
 pulumi config set docker_registry_username ""
 pulumi config set --secret docker_registry_password ""
 pulumi config set docker_producer_image_name "localhost:5000/producer"
+pulumi config set docker_mcp_image_name "localhost:5000/mcp"
+pulumi config set docker_spark_image_name "localhost:5000/spark"
+pulumi config set docker_airflow_image_name "localhost:5000/airflow"
 
 pulumi config get SECRET_NAME
 pulumi config --show-secrets

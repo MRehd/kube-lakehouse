@@ -66,6 +66,12 @@ config:
   k8lh:docker_mcp_image_name:
     description: Full image name without tag, e.g. localhost:5000/mcp or docker.io/myuser/mcp
     value: "localhost:5000/mcp"
+  k8lh:docker_spark_image_name:
+    description: Full image name without tag, e.g. localhost:5000/spark or docker.io/myuser/spark
+    value: "localhost:5000/spark"
+  k8lh:docker_airflow_image_name:
+    description: Full image name without tag, e.g. localhost:5000/spark or docker.io/myuser/airflow
+    value: "localhost:5000/airflow"
   k8lh:docker_flink_jobs_image_name:
     description: Full image name without tag, e.g. localhost:5000/flink-jobs or docker.io/myuser/flink-jobs
     value: "localhost:5000/flink-jobs"

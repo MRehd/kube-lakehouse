@@ -38,7 +38,11 @@ from psql import DatabaseArgs, GrantArgs, Psql, PsqlArgs, UserArgs
 from trino import Trino, TrinoArgs, TrinoAutoscalingArgs, TrinoIcebergCatalogArgs
 from flink import Flink, FlinkArgs, FlinkIcebergCatalogArgs, FlinkJobArgs
 from producer import Producer, ProducerArgs
-from spark import Spark, SparkArgs, SparkIcebergCatalogArgs
+from spark import (
+    Spark, SparkArgs, SparkIcebergCatalogArgs,
+    SparkOperator, SparkOperatorArgs,
+    SparkHistory, SparkHistoryArgs,
+)
 from airflow import Airflow, AirflowArgs, AirflowConnectionArgs
 from mlflow import Mlflow, MlflowArgs
 from ollama import Ollama, OllamaArgs
@@ -683,7 +687,65 @@ spark = Spark(
         namespace=ns.metadata.name,
         release_name=spark_name,
         service_account_name=spark_sa.metadata.name,
+        image_name=config.require('docker_spark_image_name'),
+        registry_username=config.require('docker_registry_username'),
+        registry_password=config.require_secret('docker_registry_password'),
         connect_master='k8s://https://kubernetes.default.svc:443',
+        s3_endpoint=minio.endpoint,
+        s3_access_key=credentials['minio']['user'],
+        s3_secret_key=credentials['minio']['password'],
+        s3_region=s3_region,
+        iceberg_catalogs=[
+            SparkIcebergCatalogArgs(name='bronze', polaris_endpoint=polaris.endpoint, warehouse='bronze', credentials_secret=spark_credentials_secret),
+            SparkIcebergCatalogArgs(name='silver', polaris_endpoint=polaris.endpoint, warehouse='silver', credentials_secret=spark_credentials_secret),
+            SparkIcebergCatalogArgs(name='gold',   polaris_endpoint=polaris.endpoint, warehouse='gold',   credentials_secret=spark_credentials_secret),
+        ],
+    ),
+    opts=pulumi.ResourceOptions(depends_on=[ns, minio, spark_sa, polaris_principals]),
+)
+
+
+# =============================================================================
+# SPARK OPERATOR - BATCH JOB ORCHESTRATION
+# =============================================================================
+
+# Deploys the kubeflow spark-operator. Each batch job becomes a SparkApplication
+# CR with its own driver + executor pods, isolated from the Connect server above.
+# Both share the same custom Spark image. Submit jobs from Airflow DAGs via
+# SparkKubernetesOperator, or call spark_operator.submit_application() here for
+# infrastructure-managed jobs.
+spark_operator_name = f'spark-operator-{project_name}-{env}'
+spark_operator = SparkOperator(
+    spark_operator_name,
+    SparkOperatorArgs(
+        namespace=ns.metadata.name,
+        watch_namespaces=[ns_name],
+        event_log_bucket='spark-logs',
+        s3_endpoint=minio.endpoint,
+        s3_access_key=credentials['minio']['user'],
+        s3_secret_key=credentials['minio']['password'],
+        s3_region=s3_region,
+    ),
+    opts=pulumi.ResourceOptions(depends_on=[ns, minio]),
+)
+
+
+# =============================================================================
+# SPARK HISTORY SERVER - SHARED UI FOR CONNECT + OPERATOR JOBS
+# =============================================================================
+
+# Single deployment shared by Spark Connect and SparkApplications. Wired by
+# pointing all three at the same s3a://spark-logs/ bucket — the writers
+# (Connect, operator-managed jobs) emit rolling event logs there, and the
+# History Server reads from the same path.
+spark_history_name = f'spark-history-{project_name}-{env}'
+spark_history = SparkHistory(
+    spark_history_name,
+    SparkHistoryArgs(
+        namespace=ns.metadata.name,
+        release_name=spark_history_name,
+        image=spark.image,
+        event_log_bucket='spark-logs',
         s3_endpoint=minio.endpoint,
         s3_access_key=credentials['minio']['user'],
         s3_secret_key=credentials['minio']['password'],
@@ -691,13 +753,8 @@ spark = Spark(
         ingress_enabled=True,
         ingress_domain=domain,
         ingress_class_name='nginx',
-        iceberg_catalogs=[
-            SparkIcebergCatalogArgs(name='bronze', polaris_endpoint=polaris.endpoint, warehouse='bronze', credentials_secret=spark_credentials_secret),
-            SparkIcebergCatalogArgs(name='silver', polaris_endpoint=polaris.endpoint, warehouse='silver', credentials_secret=spark_credentials_secret),
-            SparkIcebergCatalogArgs(name='gold',   polaris_endpoint=polaris.endpoint, warehouse='gold',   credentials_secret=spark_credentials_secret),
-        ],
     ),
-    opts=pulumi.ResourceOptions(depends_on=[ns, ingress_nginx, minio, spark_sa, polaris_principals]),
+    opts=pulumi.ResourceOptions(depends_on=[ns, ingress_nginx, minio, spark]),
 )
 
 
@@ -737,6 +794,9 @@ airflow = Airflow(
     AirflowArgs(
         namespace=ns.metadata.name,
         release_name=airflow_name,
+        image_name=config.require('docker_airflow_image_name'),
+        registry_username=config.require('docker_registry_username'),
+        registry_password=config.require_secret('docker_registry_password'),
         admin_password=credentials['airflow']['admin_password'],
         db_metadata_secret='airflow-metadata',
         fernet_key_secret='airflow-fernet',
@@ -748,13 +808,6 @@ airflow = Airflow(
         ingress_enabled=True,
         ingress_domain=domain,
         ingress_class_name='nginx',
-        pip_packages=[
-            'apache-airflow-providers-apache-spark==6.0.1',
-            'pyspark==4.0.0',
-            'numpy==2.4.4',
-            'polars==1.40.0',
-            'mlflow==3.11.1'
-        ],
         env={
             # Kafka
             'KAFKA_BOOTSTRAP_SERVERS': kafka.bootstrap_servers,
@@ -764,6 +817,8 @@ airflow = Airflow(
             'S3_SECRET_KEY': credentials['minio']['password'],
             # Polaris
             'POLARIS_ENDPOINT': polaris.endpoint,
+            # Spark — image ref used by SparkKubernetesOperator-based DAGs
+            'SPARK_IMAGE': spark.image,
             # Producer
             'PRODUCER_BASE_URL': producer.endpoint,
             # Expose the rendered airflow.cfg in the UI (Admin → Configurations)
@@ -775,13 +830,6 @@ airflow = Airflow(
         connections=[
             AirflowConnectionArgs(conn_id='spark_default', uri=spark.connect_server_url),
         ],
-        extra_values={
-            'scheduler': {
-                'startupProbe': {
-                    'failureThreshold': 20,
-                },
-            },
-        },
     ),
     opts=pulumi.ResourceOptions(depends_on=[ns, ingress_nginx, db['airflow']['instance'], airflow_metadata_secret, spark]),
 )
@@ -975,7 +1023,7 @@ pulumi.export('airflow_url', airflow.ui_url)
 # Spark
 pulumi.export('spark_namespace', spark.namespace)
 pulumi.export('spark_connect_server_url', spark.connect_server_url)
-pulumi.export('spark_history_server_url', spark.history_server_url)
+pulumi.export('spark_history_server_url', spark_history.history_server_url)
 
 # Flink
 pulumi.export('flink_namespace', flink.namespace)

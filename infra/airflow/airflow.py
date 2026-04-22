@@ -39,17 +39,19 @@ Example:
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Optional
+from typing import Optional
 
 import json
 import yaml
 import pulumi
+import pulumi_docker as docker
 from pulumi import Input, Output
 from pulumi_kubernetes.helm.v3 import Chart, ChartOpts, FetchOpts
 
 from config.utils.utils import _deep_merge
 
-CONFIG_DIR = Path(__file__).parent.parent / 'config'
+CONFIG_DIR    = Path(__file__).parent.parent / 'config'
+BUILD_CONTEXT = str(Path(__file__).parent / 'image')
 
 
 @dataclass
@@ -82,6 +84,29 @@ class AirflowArgs:
 
     chart_version: str = '1.20.0'
     '''Version of the official Apache Airflow Helm chart.'''
+
+    image_name: Input[str] = ''
+    '''
+    Full image name without tag for the custom Airflow image, e.g.
+    "docker.io/myuser/airflow". Built from infra/airflow/image/ with
+    pip deps baked in (FROM apache/airflow + constraints-pinned install).
+    Used for every Airflow pod (scheduler, api-server, workers, dag-processor).
+    '''
+
+    image_tag: Optional[Input[str]] = None
+    '''
+    Image tag. Defaults to `airflow_version` so the tag matches the Airflow
+    release baked into the image.
+    '''
+
+    registry_username: Input[str] = ''
+    '''Docker registry username.'''
+
+    registry_password: Input[str] = ''
+    '''Docker registry password or access token. Accepts a Pulumi secret Output.'''
+
+    registry_server: Input[str] = 'https://index.docker.io/v1/'
+    '''Docker registry server URL.'''
 
     executor: Input[str] = 'KubernetesExecutor'
     '''
@@ -159,11 +184,16 @@ class AirflowArgs:
     Use for credentials that should not appear in Helm values (e.g. S3 access keys).
     '''
 
-    pip_packages: List[str] = field(default_factory=list)
+    airflow_version: str = '3.1.8'
     '''
-    Python packages to install in Airflow pods (scheduler, webserver, workers).
-    Passed as _PIP_ADDITIONAL_REQUIREMENTS — installed at pod startup by the Airflow entrypoint.
+    Airflow version. Passed as a build arg to the custom image (FROM
+    apache/airflow:<version>-python<py>) and used to build the pip constraints
+    URL for the deps in infra/airflow/image/requirements.txt.
+    Also becomes the image tag if `image_tag` is left unset.
     '''
+
+    python_version: str = '3.12'
+    '''Python version of the Airflow base image — apache/airflow:<v>-python<py>.'''
 
     connections: list = field(default_factory=list)
     '''
@@ -229,9 +259,41 @@ class Airflow(pulumi.ComponentResource):
         env_values      = {k: Output.from_input(v) for k, v in args.env.items()}
         conn_uris       = {c.conn_id: Output.from_input(c.uri) for c in args.connections}
         release         = args.release_name or name
+        image_name      = Output.from_input(args.image_name)
+        image_tag       = Output.from_input(args.image_tag if args.image_tag is not None else args.airflow_version)
+
+        # Build a custom Airflow image from infra/airflow/image/ — bakes the
+        # Python deps in requirements.txt onto apache/airflow so pods don't
+        # re-download them every restart (the _PIP_ADDITIONAL_REQUIREMENTS path
+        # is fragile: large installs blow past the startup-probe timeout).
+        image_obj = docker.Image(
+            f'{name}-image',
+            image_name=Output.concat(image_name, ':', image_tag),
+            build=docker.DockerBuildArgs(
+                context=BUILD_CONTEXT,
+                dockerfile=f'{BUILD_CONTEXT}/dockerfile',
+                args={
+                    'AIRFLOW_VERSION': args.airflow_version,
+                    'PYTHON_VERSION':  args.python_version,
+                },
+                platform='linux/amd64',
+            ),
+            registry=docker.RegistryArgs(
+                server=Output.from_input(args.registry_server),
+                username=Output.from_input(args.registry_username),
+                password=Output.from_input(args.registry_password),
+            ),
+            opts=pulumi.ResourceOptions(parent=self),
+        )
+        self.image = image_obj.image_name
 
         v = json.loads((CONFIG_DIR / 'helm/helm_values_airflow.json').read_text())
-        v['executor']   = args.executor
+        v['executor'] = args.executor
+        v['images']   = {'airflow': {
+            'repository': image_name,
+            'tag':        image_tag,
+            'pullPolicy': 'Always',
+        }}
         v['postgresql'] = {'enabled': False}
         v['data']       = {'metadataSecretName': args.db_metadata_secret}
         v['fernetKeySecretName']          = args.fernet_key_secret
@@ -269,10 +331,6 @@ class Airflow(pulumi.ComponentResource):
         if args.env_secrets:
             v['extraEnvFrom'] = yaml.dump([{'secretRef': {'name': s}} for s in args.env_secrets])
 
-        if args.pip_packages:
-            pip_entry = {'name': '_PIP_ADDITIONAL_REQUIREMENTS', 'value': ' '.join(args.pip_packages)}
-            v['env'] = v.get('env', []) + [pip_entry]
-
         if args.ingress_enabled and args.ingress_domain:
             v['ingress'] = {'apiServer': {
                 'enabled':          True,
@@ -300,7 +358,11 @@ class Airflow(pulumi.ComponentResource):
                 fetch_opts=FetchOpts(repo='https://airflow.apache.org'),
                 values=_deep_merge(v, args.extra_values),
             ),
-            opts=pulumi.ResourceOptions(parent=self, transforms=[ignore_generated_secret_data]),
+            opts=pulumi.ResourceOptions(
+                parent=self,
+                depends_on=[image_obj],
+                transforms=[ignore_generated_secret_data],
+            ),
         )
 
         if args.ingress_enabled and args.ingress_domain:
