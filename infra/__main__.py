@@ -28,6 +28,7 @@ import pulumi_docker as docker
 from pulumi import Output
 from pulumi_kubernetes.core.v1 import Namespace
 from pulumi_kubernetes.helm.v3 import Chart, ChartOpts, FetchOpts
+from pulumi_kubernetes.rbac.v1 import Role, RoleBinding
 
 from kafka import AutoscalingArgs, Kafka, KafkaArgs, TopicArgs
 from kafka_ui import KafkaUi, KafkaUiArgs
@@ -817,8 +818,9 @@ airflow = Airflow(
             'S3_SECRET_KEY': credentials['minio']['password'],
             # Polaris
             'POLARIS_ENDPOINT': polaris.endpoint,
-            # Spark — image ref used by SparkKubernetesOperator-based DAGs
+            # Spark — image ref + namespace used by SparkKubernetesOperator-based DAGs
             'SPARK_IMAGE': spark.image,
+            'NAMESPACE':   ns.metadata.name,
             # Producer
             'PRODUCER_BASE_URL': producer.endpoint,
             # Expose the rendered airflow.cfg in the UI (Admin → Configurations)
@@ -832,6 +834,33 @@ airflow = Airflow(
         ],
     ),
     opts=pulumi.ResourceOptions(depends_on=[ns, ingress_nginx, db['airflow']['instance'], airflow_metadata_secret, spark]),
+)
+
+
+# Allow the Airflow worker pods to create/manage SparkApplication CRs so DAGs
+# using SparkKubernetesOperator can submit jobs to the kubeflow spark-operator.
+# The Airflow Helm release lives under "<airflow_name>-chart" because the
+# Pulumi Chart resource is named with that suffix — chart templates derive SA
+# names from the release name, hence the "-chart-worker" suffix here.
+airflow_worker_sa = f'{airflow_name}-chart-worker'
+
+airflow_spark_app_role = Role(
+    f'airflow-spark-app-role-{project_name}-{env}',
+    metadata={'name': 'airflow-spark-app', 'namespace': ns.metadata.name},
+    rules=[{
+        'api_groups': ['sparkoperator.k8s.io'],
+        'resources':  ['sparkapplications', 'scheduledsparkapplications'],
+        'verbs':      ['create', 'get', 'list', 'watch', 'patch', 'update', 'delete', 'deletecollection'],
+    }],
+    opts=pulumi.ResourceOptions(depends_on=[ns]),
+)
+
+RoleBinding(
+    f'airflow-spark-app-binding-{project_name}-{env}',
+    metadata={'name': 'airflow-spark-app', 'namespace': ns.metadata.name},
+    role_ref={'api_group': 'rbac.authorization.k8s.io', 'kind': 'Role', 'name': airflow_spark_app_role.metadata.name},
+    subjects=[{'kind': 'ServiceAccount', 'name': airflow_worker_sa, 'namespace': ns.metadata.name}],
+    opts=pulumi.ResourceOptions(depends_on=[airflow, airflow_spark_app_role]),
 )
 
 

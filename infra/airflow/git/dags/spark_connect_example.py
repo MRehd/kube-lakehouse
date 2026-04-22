@@ -25,7 +25,7 @@ from airflow.decorators import dag, task
 )
 def spark_connect_example():
 
-    @task.pyspark(conn_id='spark_conn')
+    @task.pyspark(conn_id='spark_default')
     def compute_summary(spark, sc):
         rows = [
             ('BTC', 'buy',  65000.0,  0.10),

@@ -26,10 +26,16 @@
       "parallelism": "32",
       "max_active_tasks_per_dag": "16",
       "max_active_runs_per_dag": "4"
+    },
+    "kubernetes_executor": {
+      "delete_worker_pods_on_failure": "True"
     }
   },
   "logs": {
-    "persistence": {"enabled": false}
+    "persistence": {
+      "enabled": true,
+      "size":    "5Gi"
+    }
   },
   "ingress": {
     "apiServer": {"enabled": false}
