@@ -830,7 +830,17 @@ airflow = Airflow(
         # Mounts CLIENT_ID and CLIENT_SECRET from the Polaris spark principal secret
         env_secrets=[spark_credentials_secret],
         connections=[
-            AirflowConnectionArgs(conn_id='spark_default', uri=spark.connect_server_url),
+            # Scheme spark-connect:// → Airflow conn_type=spark_connect, so
+            # @task.pyspark(conn_id='spark_default') uses SparkConnectHook
+            # instead of trying to start a local JVM. The actual Spark client
+            # URI (spark.connect_server_url) still uses sc:// — only the
+            # Airflow connection URI gets the rewrite.
+            AirflowConnectionArgs(
+                conn_id='spark_default',
+                uri=spark.connect_server_url.apply(
+                    lambda u: u.replace('sc://', 'spark-connect://', 1)
+                ),
+            ),
         ],
     ),
     opts=pulumi.ResourceOptions(depends_on=[ns, ingress_nginx, db['airflow']['instance'], airflow_metadata_secret, spark]),
@@ -847,11 +857,29 @@ airflow_worker_sa = f'{airflow_name}-chart-worker'
 airflow_spark_app_role = Role(
     f'airflow-spark-app-role-{project_name}-{env}',
     metadata={'name': 'airflow-spark-app', 'namespace': ns.metadata.name},
-    rules=[{
-        'api_groups': ['sparkoperator.k8s.io'],
-        'resources':  ['sparkapplications', 'scheduledsparkapplications'],
-        'verbs':      ['create', 'get', 'list', 'watch', 'patch', 'update', 'delete', 'deletecollection'],
-    }],
+    rules=[
+        {
+            'api_groups': ['sparkoperator.k8s.io'],
+            # /status is a separate subresource for RBAC purposes; the
+            # SparkKubernetesOperator polls it to track job state.
+            'resources':  [
+                'sparkapplications', 'sparkapplications/status',
+                'scheduledsparkapplications', 'scheduledsparkapplications/status',
+            ],
+            'verbs':      ['create', 'get', 'list', 'watch', 'patch', 'update', 'delete', 'deletecollection'],
+        },
+        # The operator also tails driver pod logs to surface them in Airflow.
+        {
+            'api_groups': [''],
+            'resources':  ['pods', 'pods/log'],
+            'verbs':      ['get', 'list', 'watch'],
+        },
+        {
+            'api_groups': [''],
+            'resources':  ['events'],
+            'verbs':      ['get', 'list', 'watch'],
+        },
+    ],
     opts=pulumi.ResourceOptions(depends_on=[ns]),
 )
 

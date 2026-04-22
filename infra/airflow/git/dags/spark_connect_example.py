@@ -2,18 +2,17 @@
 Sample DAG demonstrating the @task.pyspark decorator against Spark Connect.
 
 The task runs inside an Airflow worker pod and connects remotely to the Spark
-Connect server (port 15002) over gRPC — no spark-submit, no driver pod.
+Connect server over gRPC — no spark-submit, no driver pod, no local JVM.
 
-The `spark_default` connection is auto-registered from spark.connect_server_url
-(sc://<release>-connect.<namespace>.svc.cluster.local:15002) via the
-AIRFLOW_CONN_SPARK_DEFAULT env var in the Airflow Helm values.
-
-Requires `apache-airflow-providers-apache-spark` and `pyspark` in pip_packages.
+The `spark_default` connection is auto-registered by Pulumi with URI scheme
+spark-connect:// so Airflow classifies it as conn_type=spark_connect; the
+decorator then builds the SparkSession via SparkConnectHook and injects
+`spark` / `sc` as arguments.
 '''
 
 from datetime import datetime
 
-from airflow.decorators import dag, task
+from airflow.sdk import dag, task
 
 
 @dag(
@@ -21,12 +20,12 @@ from airflow.decorators import dag, task
     start_date=datetime(2026, 1, 1),
     schedule=None,
     catchup=False,
-    tags=['example', 'spark'],
+    tags=['example', 'spark', 'spark-connect'],
 )
 def spark_connect_example():
 
     @task.pyspark(conn_id='spark_default')
-    def compute_summary(spark, sc):
+    def compute_summary(spark):
         rows = [
             ('BTC', 'buy',  65000.0,  0.10),
             ('BTC', 'sell', 66500.0,  0.05),
@@ -43,7 +42,7 @@ def spark_connect_example():
               .withColumnRenamed('sum(notional)', 'total_notional')
               .orderBy('symbol', 'action')
         )
-        return summary
+        return summary.toPandas()
 
     compute_summary()
 

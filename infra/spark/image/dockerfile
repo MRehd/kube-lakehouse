@@ -6,4 +6,16 @@ USER root
 COPY requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir -r /tmp/requirements.txt
 
+# S3A + Iceberg JARs baked in so every pod that uses this image (Spark Connect
+# server, executors spawned by Connect, and SparkApplication drivers/executors
+# launched by the kubeflow operator) can read/write s3a:// and Iceberg tables
+# without per-pod init-container downloads.
+RUN set -eux; \
+    cd /opt/spark/jars; \
+    curl -fL -o hadoop-aws.jar          https://repo1.maven.org/maven2/org/apache/hadoop/hadoop-aws/3.4.0/hadoop-aws-3.4.0.jar; \
+    curl -fL -o aws-java-sdk-bundle.jar https://repo1.maven.org/maven2/com/amazonaws/aws-java-sdk-bundle/1.12.367/aws-java-sdk-bundle-1.12.367.jar; \
+    curl -fL -o aws-bundle.jar          https://repo1.maven.org/maven2/software/amazon/awssdk/bundle/2.29.52/bundle-2.29.52.jar; \
+    curl -fL -o iceberg-spark-runtime.jar https://repo1.maven.org/maven2/org/apache/iceberg/iceberg-spark-runtime-4.0_2.13/1.10.1/iceberg-spark-runtime-4.0_2.13-1.10.1.jar; \
+    curl -fL -o iceberg-aws-bundle.jar    https://repo1.maven.org/maven2/org/apache/iceberg/iceberg-aws-bundle/1.10.1/iceberg-aws-bundle-1.10.1.jar
+
 USER 185
