@@ -23,6 +23,8 @@ Usage:
 # IMPORTS
 # =============================================================================
 
+from pathlib import Path
+
 import pulumi
 import pulumi_docker as docker
 from pulumi import Output
@@ -183,15 +185,27 @@ minio = Minio(
 
 # Create buckets for the medallion architecture data layers
 # Each layer represents a different stage of data processing
-minio.create_buckets(
+minio_buckets = minio.create_buckets(
     f'bucket-{project_name}-{env}-',
     [
-        BucketArgs(name='bronze', versioning=True),      # Raw data
-        BucketArgs(name='silver', versioning=True),      # Cleaned data
-        BucketArgs(name='gold', versioning=True),        # Aggregated data
-        BucketArgs(name='spark-logs', versioning=False),    # Spark event logs for History Server
-        BucketArgs(name='mlflow-artifacts', versioning=False), # MLflow artifact store
+        BucketArgs(name='bronze', versioning=True),             # Raw data
+        BucketArgs(name='silver', versioning=True),             # Cleaned data
+        BucketArgs(name='gold', versioning=True),               # Aggregated data
+        BucketArgs(name='spark-logs', versioning=False),        # Spark event logs for History Server
+        BucketArgs(name='mlflow-artifacts', versioning=False),  # MLflow artifact store
+        BucketArgs(name='spark-jobs', versioning=False),        # SparkKubernetesOperator mainApplicationFile scripts
     ],
+)
+
+# Sync Spark job scripts into the spark-jobs bucket. Pulumi re-runs the sync
+# Job (via a content-hash annotation) whenever any file under infra/spark/jobs
+# changes — no image rebuild needed to ship a new job script.
+minio.sync_objects(
+    f'spark-jobs-sync-{project_name}-{env}',
+    local_dir=Path(__file__).parent / 'spark' / 'jobs',
+    bucket='spark-jobs',
+    glob='*.py',
+    opts=pulumi.ResourceOptions(depends_on=[minio_buckets]),
 )
 
 

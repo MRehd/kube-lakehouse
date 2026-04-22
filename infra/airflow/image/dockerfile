@@ -9,11 +9,20 @@ ARG PYTHON_VERSION
 
 COPY requirements.txt /tmp/requirements.txt
 
+# Airflow deps pinned via the official constraints file for reproducibility.
 RUN pip install --no-cache-dir \
     --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-${AIRFLOW_VERSION}/constraints-${PYTHON_VERSION}.txt" \
     -r /tmp/requirements.txt
 
-# Airflow constraints pin protobuf to 4.x (most providers want it there), but
-# pyspark 4.x's Spark Connect proto bindings import google.protobuf.runtime_version
-# which only exists in protobuf >=5.26. Bump it after the constrained install.
-RUN pip install --no-cache-dir --upgrade 'protobuf>=5.27,<6'
+# Spark Connect client — pyspark must match the Spark server version exactly
+# (SparkArgs.image_tag in infra/spark/spark.py). Keep this pin in lockstep with
+# that tag; drifting even a patch causes SQL_CONF_NOT_FOUND runtime errors.
+# Installed without constraints so we can hold an exact version that differs
+# from whatever airflow constraints would pick.
+#
+# Also bumps protobuf past airflow's 4.x pin: pyspark 4.x's connect proto
+# bindings were compiled with gencode 6.x, which needs protobuf >=6.x runtime.
+RUN pip install --no-cache-dir --upgrade \
+    'pyspark==4.0.0' \
+    'zstandard>=0.25' \
+    'protobuf>=6.33,<7'

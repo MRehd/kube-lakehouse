@@ -21,6 +21,7 @@ Example:
     ])
 '''
 
+import hashlib
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -29,6 +30,7 @@ from typing import List, Optional
 import pulumi
 from pulumi import Input, Output
 from pulumi_kubernetes.batch.v1 import Job
+from pulumi_kubernetes.core.v1 import ConfigMap
 from pulumi_kubernetes.helm.v3 import Chart, ChartOpts, FetchOpts
 from pulumi_kubernetes.networking.v1 import Ingress
 
@@ -348,6 +350,103 @@ class Minio(pulumi.ComponentResource):
             metadata={
                 'namespace': self._namespace,
                 'labels': {'app': 'minio-bucket-provisioner'},
+            },
+            spec=spec,
+            opts=job_opts,
+        )
+
+    def sync_objects(
+        self,
+        name: str,
+        local_dir: Path,
+        bucket: str,
+        glob: str = '*',
+        opts: pulumi.ResourceOptions = None,
+    ) -> Optional[Job]:
+        '''
+        Sync every file under local_dir (flat, matching `glob`) to the named
+        MinIO bucket. File contents are packed into a ConfigMap and copied into
+        the bucket by a short-lived `mc` Job.
+
+        The Job's pod template carries a SHA-256 annotation of all file
+        contents, so Pulumi replaces the Job whenever any file changes — the
+        new Job runs on the next `pulumi up` and re-uploads the set.
+
+        ConfigMap data is capped at 1 MiB across all keys; keep scripts small
+        or switch to a different staging path (e.g. presigned upload) for
+        larger payloads.
+
+        Args:
+            name:      Pulumi resource name prefix.
+            local_dir: Host directory to read from. Only top-level files matching
+                       `glob` are uploaded; subdirectories are ignored.
+            bucket:    Target MinIO bucket. Must already exist (call
+                       create_buckets first).
+            glob:      File pattern to include (defaults to every file).
+            opts:      Optional extra resource options (e.g. depends_on the
+                       bucket-provisioning Job).
+
+        Returns:
+            The sync Job, or None if local_dir has no matching files.
+
+        Example:
+            minio.sync_objects(
+                'spark-jobs-sync',
+                local_dir=Path(__file__).parent / 'spark' / 'jobs',
+                bucket='spark-jobs',
+                opts=pulumi.ResourceOptions(depends_on=[buckets]),
+            )
+        '''
+        local_dir = Path(local_dir)
+        files     = {p.name: p.read_text() for p in sorted(local_dir.glob(glob)) if p.is_file()}
+
+        if not files:
+            return None
+
+        content_hash = hashlib.sha256(
+            ''.join(f'{k}:{v}' for k, v in sorted(files.items())).encode()
+        ).hexdigest()[:16]
+
+        cm = ConfigMap(
+            f'{name}-files',
+            metadata={'namespace': self._namespace},
+            data=files,
+            opts=pulumi.ResourceOptions(parent=self),
+        )
+
+        commands = [
+            'sleep 5',
+            f'mc cp /jobs/* minio/{bucket}/',
+        ]
+
+        spec = json.loads((CONFIG_DIR / 'jobs/mc_job_spec.json').read_text())
+        container = spec['template']['spec']['containers'][0]
+        container['args']         = [' && '.join(commands)]
+        container['volumeMounts'] = [{'name': 'jobs', 'mountPath': '/jobs'}]
+        container['env'][0]['value'] = Output.concat(
+            'http://', self._root_user, ':',
+            self._root_password, '@',
+            self._release_name, '.', self._namespace,
+            '.svc.', self._cluster_domain, ':', str(self._api_port),
+        )
+        spec['template']['spec']['volumes'] = [
+            {'name': 'jobs', 'configMap': {'name': cm.metadata.name}},
+        ]
+        # Stamp the hash on the pod template so Pulumi treats the Job as
+        # changed whenever any source file changes.
+        spec['template'].setdefault('metadata', {})['annotations'] = {
+            'k8lh.io/content-hash': content_hash,
+        }
+
+        job_opts = pulumi.ResourceOptions(parent=self, depends_on=[self.chart, cm])
+        if opts:
+            job_opts = pulumi.ResourceOptions.merge(job_opts, opts)
+
+        return Job(
+            f'{name}-sync-job',
+            metadata={
+                'namespace': self._namespace,
+                'labels':    {'app': 'minio-object-sync'},
             },
             spec=spec,
             opts=job_opts,

@@ -7,10 +7,9 @@ Compare to spark_connect_example.py: this pattern is for batch-style jobs that
 benefit from per-job isolation, retries, and event-log capture. The code runs
 entirely inside its own Spark pods — no shared driver.
 
-The example runs the bundled Spark Pi job at
-/opt/spark/examples/src/main/python/pi.py — present in any apache/spark image.
-For real workloads, bake the job script into the custom Spark image at
-/opt/spark/jobs/<name>.py and reference it as local:///opt/spark/jobs/<name>.py.
+The example runs pi.py from the spark-jobs MinIO bucket. Pulumi syncs every
+file in infra/spark/jobs/ into that bucket on each `pulumi up`, so shipping a
+new job script is just: add a .py file, run pulumi up. No image rebuild.
 
 SparkKubernetesOperator is a classic operator (not a TaskFlow function) — it
 has to stay an explicit operator instance. The TaskFlow @task decorator builds
@@ -61,7 +60,7 @@ def spark_operator_example():
                 'mode':                'cluster',
                 'image':               SPARK_IMAGE,
                 'imagePullPolicy':     'Always',
-                'mainApplicationFile': 'local:///opt/spark/examples/src/main/python/pi.py',
+                'mainApplicationFile': 's3a://spark-jobs/pi.py',
                 'sparkVersion':        '4.0.0',
                 'restartPolicy':       {'type': 'Never'},
                 'driver':   {'cores': 1, 'memory': '1g', 'serviceAccount': 'spark'},
