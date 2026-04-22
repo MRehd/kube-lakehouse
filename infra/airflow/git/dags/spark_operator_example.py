@@ -95,7 +95,7 @@ def spark_operator_example():
         kubernetes_conn_id='kubernetes_default',
         # Keep the CR around after the run so the SparkHistory UI can still
         # link logs/state for it. Set True if you want auto-cleanup.
-        delete_on_termination=False,
+        delete_on_termination=True,
         get_logs=True,
         template_spec=spec,
     )
