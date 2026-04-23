@@ -141,4 +141,7 @@ pulumi destroy --yes
 # Clear state
 pulumi stack rm dev --yes
 
+# Start mcp server locally
+uvicorn mcp_app:app --host 0.0.0.0 --port 8000 --reload
+
 # Stack documentation and architecture
