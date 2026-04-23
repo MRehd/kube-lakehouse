@@ -27,7 +27,7 @@ import trino
 from fastmcp import FastMCP
 
 CURRENT_BALANCE = {
-    'USD': 100000.0,
+    'USD': 1000.0,
     'BTC': 0.0,
     'ETH': 0.0,
     'LAST_RATE_BTC': None,
@@ -102,7 +102,7 @@ def get_crypto_price_history(
     granularity: int = 60
 ) -> dict[str, Any]:
     '''
-    Fetch historical OHLC candles for a crypto product from the Coinbase Exchange API.
+    Fetch historical OHLC candles for a crypto product from the Coinbase Exchange API. Maximum of 300 candles per call.
 
     Args:
         start_time:    ISO 8601 start timestamp (e.g. '2026-04-23T00:00:00Z'), inclusive.
@@ -123,7 +123,7 @@ def get_crypto_price_history(
     data = r.get(url).json()
     data = sorted(data, key=lambda x: x[0])
 
-    return str([dict(zip(schema, v)) for v in data])
+    return {'candles': [dict(zip(schema, v)) for v in data]}
 
 @mcp.tool()
 def get_crypto_price_now(
@@ -199,7 +199,7 @@ def place_trade(
         CURRENT_BALANCE[crypto] -= amount
         CURRENT_BALANCE[f'LAST_RATE_{crypto}'] = cur_price
 
-    return str(CURRENT_BALANCE)
+    return CURRENT_BALANCE
 
 @mcp.tool()
 def get_current_balance() -> dict[str, Any]:
