@@ -27,13 +27,13 @@ def spark_bulk_append():
 
     @task.pyspark(conn_id='spark_default')
     def btc_to_bronze(spark) -> int:
-        df = spark.read.parquet('s3a://raw/btc_parquet')
+        df = spark.read.parquet('s3a://raw/btc_parquet').select('Timestamp', 'Low', 'High', 'Open', 'Close', 'Volume')
         df.writeTo('bronze.crypto.btc').append()
         return df.count()
     
     @task.pyspark(conn_id='spark_default')
     def eth_to_bronze(spark) -> int:
-        df = spark.read.parquet('s3a://raw/eth_parquet')
+        df = spark.read.parquet('s3a://raw/eth_parquet').select('Timestamp', 'Low', 'High', 'Open', 'Close', 'Volume')
         df.writeTo('bronze.crypto.eth').append()
         return df.count()
 
