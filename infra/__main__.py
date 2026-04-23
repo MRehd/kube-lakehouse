@@ -188,6 +188,7 @@ minio = Minio(
 minio_buckets = minio.create_buckets(
     f'bucket-{project_name}-{env}-',
     [
+        BucketArgs(name='raw', versioning=True),                # Landing Zone
         BucketArgs(name='bronze', versioning=True),             # Raw data
         BucketArgs(name='silver', versioning=True),             # Cleaned data
         BucketArgs(name='gold', versioning=True),               # Aggregated data
