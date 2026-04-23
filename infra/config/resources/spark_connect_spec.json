@@ -23,6 +23,16 @@
         "image": "",
         "command": ["/opt/spark/bin/spark-submit"],
         "args": [],
+        "env": [
+          {
+            "name":      "SPARK_LOCAL_HOSTNAME",
+            "valueFrom": {"fieldRef": {"fieldPath": "status.podIP"}}
+          },
+          {
+            "name":      "SPARK_LOCAL_IP",
+            "valueFrom": {"fieldRef": {"fieldPath": "status.podIP"}}
+          }
+        ],
         "ports": [
           {"containerPort": 15002, "name": "grpc"},
           {"containerPort": 4040, "name": "ui"}

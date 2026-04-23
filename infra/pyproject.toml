@@ -15,7 +15,9 @@ dependencies = [
     "pydantic",
     "aiokafka",
     "pyflink",
-    "fastmcp"
+    "fastmcp",
+    "trino",
+    "uvicorn[standard]"
 ]
 
 [dependency-groups]
