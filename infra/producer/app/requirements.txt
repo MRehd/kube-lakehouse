@@ -1,6 +1,7 @@
 kafka-python
 requests
 aiokafka
+aiohttp
 flask
 fastapi
 uvicorn

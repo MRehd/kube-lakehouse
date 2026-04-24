@@ -50,9 +50,6 @@ async def start_stream(params: StreamRequest):
 
   # create_task schedules the coroutine on the running event loop without
   # blocking this endpoint — equivalent to executor.submit() in the threaded version.
-  # NOTE: _async_feed_stream uses time.sleep() which blocks the event loop during
-  # the wait phase. Replace with `await asyncio.sleep()` in the producer for fully
-  # non-blocking behaviour.
   task = asyncio.create_task(producer._async_feed_stream())
   streams[kafka_topic] = (producer, task)
   logging.info(f"Started task for Kafka topic '{kafka_topic}'.")

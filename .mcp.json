@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "kube-lakehouse": {
+      "type": "stdio",
+      "command": "uv",
+      "args": [
+        "--directory", "infra",
+        "run",
+        "python", "mcp/app/mcp_app.py"
+      ],
+      "env": {
+        "MCP_TRANSPORT": "stdio"
+      }
+    }
+  }
+}
