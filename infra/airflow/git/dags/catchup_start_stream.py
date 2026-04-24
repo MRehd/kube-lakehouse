@@ -14,15 +14,16 @@ Env vars used (all injected by Pulumi into the Airflow pods):
 '''
 
 import os
+import logging
 import requests as r
 from datetime import datetime
 from pyspark.sql import functions as f
 from airflow.sdk import chain, dag, task
+logging.basicConfig(level=logging.INFO)
 
 
 KAFKA_BOOTSTRAP_SERVERS = os.getenv('KAFKA_BOOTSTRAP_SERVERS')
 PRODUCER_BASE_URL       = os.getenv('PRODUCER_BASE_URL')
-
 
 def get_max_timestamp(spark, table: str) -> str:
     max_timestamp = spark.read.format('iceberg').load(table).select(f.max(f.col('Timestamp'))).collect()[0][0]
@@ -34,7 +35,7 @@ def get_max_timestamp(spark, table: str) -> str:
 
 
 @dag(
-    dag_id='spark_connect_bulk_append',
+    dag_id='catch_up_start_stream',
     start_date=datetime(2026, 1, 1),
     schedule=None,
     catchup=False,
@@ -50,6 +51,7 @@ def catch_up_start_stream():
                  .select('Timestamp', 'Low', 'High', 'Open', 'Close', 'Volume')
                  .where(f"Timestamp > '{max_timestamp}'")
         )
+        logging.info(f"Backfilling {df.count()} new rows for BTC since {max_timestamp}")
         df.writeTo('bronze.crypto.btc').append()
         return get_max_timestamp(spark, 'bronze.crypto.btc')
 
@@ -68,7 +70,7 @@ def catch_up_start_stream():
     def start_btc_stream(spark) -> dict:
         start_time = spark.sql(
             "select coalesce(max(Timestamp), '2017-01-01 00:00:00') from bronze.crypto.btc"
-        ).collect()[0][0]
+        ).collect()[0][0].strftime('%Y-%m-%d %H:%M:%S')
 
         response = r.post(
             f'{PRODUCER_BASE_URL}/start-stream',
@@ -87,7 +89,7 @@ def catch_up_start_stream():
     def start_eth_stream(spark) -> dict:
         start_time = spark.sql(
             "select coalesce(max(Timestamp), '2017-01-01 00:00:00') from bronze.crypto.eth"
-        ).collect()[0][0]
+        ).collect()[0][0].strftime('%Y-%m-%d %H:%M:%S')
 
         response = r.post(
             f'{PRODUCER_BASE_URL}/start-stream',
