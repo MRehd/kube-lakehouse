@@ -63,6 +63,7 @@ def catch_up_start_stream():
                  .select('Timestamp', 'Low', 'High', 'Open', 'Close', 'Volume')
                  .where(f"Timestamp > '{max_timestamp}'")
         )
+        logging.info(f"Backfilling {df.count()} new rows for ETH since {max_timestamp}")
         df.writeTo('bronze.crypto.eth').append()
         return get_max_timestamp(spark, 'bronze.crypto.eth')
 
