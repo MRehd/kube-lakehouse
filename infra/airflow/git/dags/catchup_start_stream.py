@@ -14,12 +14,10 @@ Env vars used (all injected by Pulumi into the Airflow pods):
 '''
 
 import os
-from datetime import datetime
-
 import requests as r
+from datetime import datetime
 from pyspark.sql import functions as f
-
-from airflow.sdk import dag, task
+from airflow.sdk import chain, dag, task
 
 
 KAFKA_BOOTSTRAP_SERVERS = os.getenv('KAFKA_BOOTSTRAP_SERVERS')
@@ -67,7 +65,7 @@ def catch_up_start_stream():
         return get_max_timestamp(spark, 'bronze.crypto.eth')
 
     @task.pyspark(conn_id='spark_default')
-    def start_btc_stream(spark):
+    def start_btc_stream(spark) -> dict:
         start_time = spark.sql(
             "select coalesce(max(Timestamp), '2017-01-01 00:00:00') from bronze.crypto.btc"
         ).collect()[0][0]
@@ -86,7 +84,7 @@ def catch_up_start_stream():
         return response.json()
 
     @task.pyspark(conn_id='spark_default')
-    def start_eth_stream(spark):
+    def start_eth_stream(spark) -> dict:
         start_time = spark.sql(
             "select coalesce(max(Timestamp), '2017-01-01 00:00:00') from bronze.crypto.eth"
         ).collect()[0][0]
@@ -104,7 +102,10 @@ def catch_up_start_stream():
         )
         return response.json()
 
-    [catch_up_btc_to_bronze(), catch_up_eth_to_bronze()] >> [start_btc_stream(), start_eth_stream()]
+    chain(
+        [catch_up_btc_to_bronze(), catch_up_eth_to_bronze()],
+        [start_btc_stream(), start_eth_stream()]
+    )
 
 
 catch_up_start_stream()
