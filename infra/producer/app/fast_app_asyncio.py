@@ -1,6 +1,6 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from utils.producer import CryptoProducer
+from utils.producer_async import CryptoProducer
 import asyncio
 import logging
 import sys
