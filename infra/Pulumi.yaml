@@ -78,3 +78,4 @@ config:
   k8lh:s3_region:
     description: S3/MinIO region (used for Iceberg catalog and Flink S3 config)
     value: "us-east-1"
+  k8lh:mlflow_postgres_user: mlflow
