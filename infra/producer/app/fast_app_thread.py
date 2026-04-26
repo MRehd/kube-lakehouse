@@ -1,6 +1,6 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from utils.producer import CryptoProducer
+from infra.producer.app.utils.producer_thread import CryptoProducer
 import threading
 from concurrent.futures import ThreadPoolExecutor
 import logging

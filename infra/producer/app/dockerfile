@@ -2,7 +2,7 @@ FROM python:3.13
 WORKDIR /producer
 ADD . .
 RUN pip install -r requirements.txt
-CMD ["uvicorn", "fast_app_asyncio:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "fast_app_asyncio:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
 
 
-#gunicorn -k uvicorn.workers.UvicornWorker fast_app:app --bind 0.0.0.0:8089--workers 1--threads 2
+#gunicorn -k uvicorn.workers.UvicornWorker fast_app:app --bind 0.0.0.0:8089 --workers 1 --threads 2

@@ -1,5 +1,5 @@
 from flask import Flask, request, jsonify
-from utils.producer import CryptoProducer
+from infra.producer.app.utils.producer_thread import CryptoProducer
 import threading
 import asyncio
 import logging
