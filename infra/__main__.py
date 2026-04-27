@@ -474,9 +474,9 @@ kafka = Kafka(
             target_cpu_utilization=70,
         ),
         topics=[
-            TopicArgs(name='btc', partitions=2, replicas=1),
-            TopicArgs(name='eth', partitions=2, replicas=1),
-            TopicArgs(name='transactions', partitions=2, replicas=1)
+            TopicArgs(name='btc', partitions=1, replicas=1),
+            TopicArgs(name='eth', partitions=1, replicas=1),
+            TopicArgs(name='transactions', partitions=1, replicas=1)
         ],
     ),
     opts=pulumi.ResourceOptions(depends_on=[ns, ingress_nginx]),

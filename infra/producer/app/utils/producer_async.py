@@ -175,7 +175,9 @@ class CryptoProducer:
           await self.aio_producer.flush()
 
         self.end_time = datetime.utcnow().strftime(self.format_str)
-        if last:
+        if not futures:
+          await asyncio.sleep(self.buffer)
+        elif last:
           time_diff_sec = (datetime.utcnow() - datetime.strptime(last, self.format_str)).total_seconds()
           if time_diff_sec < self.buffer:
             await asyncio.sleep(max(self.buffer - time_diff_sec, 1))
